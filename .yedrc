@@ -1,0 +1,7 @@
+set ctags-additional-paths "~/projects/yed/src/*"
+set terminal-shell '/bin/zsh'
+plugins-add-dir .
+plugin-load terminal
+# vimish-bind normal ctrl-t multi 'frame-new 0.25 0.25 0.5 0.5' 'plugin-load terminal' 'term-new'
+# vimish-bind insert ctrl-t multi 'frame-new 0.25 0.25 0.5 0.5' 'plugin-load terminal' 'term-new'
+# set default-scroll-offset 0

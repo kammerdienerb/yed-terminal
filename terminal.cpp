@@ -10,6 +10,7 @@
 #include <sys/ioctl.h>
 #include <fcntl.h>
 #include <ctype.h>
+#include <climits>
 
 #ifdef __APPLE__
 #include <util.h>
