@@ -587,8 +587,8 @@ struct Term {
             setsid();
 
             if (ioctl(this->slave_fd, TIOCSCTTY, NULL) == -1) {
-                printf("ioctl(TIOCSCTTY) failed with errno = %d\n", errno);
-                exit(1);
+                DBG("ioctl(TIOCSCTTY) failed with errno = %d\n", errno);
+                return;
             }
 
             dup2(this->slave_fd, 0);
