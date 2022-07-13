@@ -1307,6 +1307,63 @@ out:;
                 case ARROW_LEFT:
                     write(this->master_fd, "D", 1);
                     break;
+                case DEL_KEY:
+                    write(this->master_fd, "\e[3~", 4);
+                    break;
+                case HOME_KEY:
+                    write(this->master_fd, "\e[1~", 4);
+                    break;
+                case END_KEY:
+                    write(this->master_fd, "\e[4~", 4);
+                    break;
+                case PAGE_UP:
+                    write(this->master_fd, "\e[5~", 4);
+                    break;
+                case PAGE_DOWN:
+                    write(this->master_fd, "\e[6~", 4);
+                    break;
+                case SHIFT_TAB:
+                    write(this->master_fd, "\e[Z", 3);
+                    break;
+                case FN1:
+                    write(this->master_fd, "\eOP", 3);
+                    break;
+                case FN2:
+                    write(this->master_fd, "\eOQ", 3);
+                    break;
+                case FN3:
+                    write(this->master_fd, "\eOR", 3);
+                    break;
+                case FN4:
+                    write(this->master_fd, "\eOS", 3);
+                    break;
+                case FN5:
+                    write(this->master_fd, "\e[15~", 5);
+                    break;
+                case FN6:
+                    write(this->master_fd, "\e[17~", 5);
+                    break;
+                case FN7:
+                    write(this->master_fd, "\e[18~", 5);
+                    break;
+                case FN8:
+                    write(this->master_fd, "\e[19~", 5);
+                    break;
+                case FN9:
+                    write(this->master_fd, "\e[20~", 5);
+                    break;
+                case FN10:
+                    write(this->master_fd, "\e[21~", 5);
+                    break;
+                case FN11:
+                    write(this->master_fd, "\e[23~", 5);
+                    break;
+                case FN12:
+                    write(this->master_fd, "\e[24~", 5);
+                    break;
+                case MENU_KEY:
+                    write(this->master_fd, "\e[29~", 5);
+                    break;
                 default:
                     char c = keys[i];
                     write(this->master_fd, &c, 1);
