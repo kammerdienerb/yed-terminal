@@ -60,7 +60,7 @@ struct {
 
 
 
-#define DBG_LOG_ON
+/* #define DBG_LOG_ON */
 
 #define LOG__XSTR(x) #x
 #define LOG_XSTR(x) LOG__XSTR(x)
@@ -475,16 +475,22 @@ struct Screen : std::vector<Line> {
     }
 };
 
-#define DEFAULT_SHELL "/bin/bash"
+#define DEFAULT_SHELL   "/bin/bash"
+#define DEFAULT_TERMVAR "screen"
 
 const char *get_shell() {
     const char *shell;
 
     shell = yed_get_var("terminal-shell");
 
-    if (shell == NULL) { shell = DEFAULT_SHELL; }
+    if (shell == NULL) { shell = getenv("SHELL"); }
+    if (shell == NULL) { shell = DEFAULT_SHELL;   }
 
     return shell;
+}
+
+const char *get_termvar() {
+    return DEFAULT_TERMVAR;
 }
 
 
@@ -592,6 +598,32 @@ struct Term {
         if (p == 0) {
             close(this->master_fd);
             login_tty(this->slave_fd);
+
+            setenv("TERM", get_termvar(), 1);
+
+            printf("Wecome to\n\n");
+            printf(TERM_CYAN);
+            printf(
+"██    ██ ███████ ██████      ████████ ███████ ██████  ███    ███ ██ ███    ██  █████  ██      \n"
+" ██  ██  ██      ██   ██        ██    ██      ██   ██ ████  ████ ██ ████   ██ ██   ██ ██      \n"
+"  ████   █████   ██   ██        ██    █████   ██████  ██ ████ ██ ██ ██ ██  ██ ███████ ██      \n"
+"   ██    ██      ██   ██        ██    ██      ██   ██ ██  ██  ██ ██ ██  ██ ██ ██   ██ ██      \n"
+"   ██    ███████ ██████         ██    ███████ ██   ██ ██      ██ ██ ██   ████ ██   ██ ███████ \n"
+            );
+            printf(TERM_RESET);
+            printf("\n");
+
+#if 0
+            printf(
+"Welcome to\n"
+TERM_BLUE
+"                _   _                      _             _ \n"
+" _   _  ___  __| | | |_ ___ _ __ _ __ ___ (_)_ __   __ _| |\n"
+"| | | |/ _ \\/ _` | | __/ _ \\ '__| '_ ` _ \\| | '_ \\ / _` | |\n"
+"| |_| |  __/ (_| | | ||  __/ |  | | | | | | | | | | (_| | |\n"
+" \\__, |\\___|\\__,_|  \\__\\___|_|  |_| |_| |_|_|_| |_|\\__,_|_|\n"
+" |___/  \n\n" TERM_RESET);
+#endif
 
             char * const args[] = { (char*)get_shell(), NULL };
             execvp(get_shell(), args);
@@ -1406,7 +1438,7 @@ static void key(yed_event *event) {
 
     if (yed_get_real_keys(event->key, &len, keys)) {
         if (auto t = term_for_buffer(ys->active_frame->buffer)) {
-            if (event->key == CTRL_Y) {
+            if (event->key == CTRL_T) {
                 toggle_term_mode();
                 event->cancel = 1;
                 return;
@@ -1540,7 +1572,7 @@ int yed_plugin_boot(yed_plugin *self) {
     }
 
     if (!yed_get_var("terminal-shell")) {
-        yed_set_var("terminal-shell", DEFAULT_SHELL);
+        yed_set_var("terminal-shell", (char*)get_shell());
     }
 
     draw_handler.kind = EVENT_PRE_DRAW_EVERYTHING;
