@@ -6,8 +6,11 @@
 #include <thread>
 #include <mutex>
 #include <unistd.h>
+#include <signal.h>
 #include <errno.h>
 #include <sys/ioctl.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 #include <fcntl.h>
 #include <ctype.h>
 #include <climits>
@@ -16,6 +19,7 @@
 #include <util.h>
 #else
 #include <pty.h>
+#include <utmp.h>
 #endif
 
 extern "C" {
@@ -61,11 +65,18 @@ struct {
 #define LOG__XSTR(x) #x
 #define LOG_XSTR(x) LOG__XSTR(x)
 
-#define LOG(...)          \
-do {                      \
-    LOG_FN_ENTER();       \
-    yed_log(__VA_ARGS__); \
-    LOG_EXIT();           \
+#define LOG(...)                                               \
+do {                                                           \
+    LOG_FN_ENTER();                                            \
+    yed_log(__VA_ARGS__);                                      \
+    LOG_EXIT();                                                \
+} while (0)
+
+#define ELOG(...)                                              \
+do {                                                           \
+    LOG_FN_ENTER();                                            \
+    yed_log("[!] " __VA_ARGS__);                               \
+    LOG_EXIT();                                                \
 } while (0)
 
 #ifdef DBG_LOG_ON
@@ -113,7 +124,8 @@ do {                      \
 #define IS_FINAL(_c) ((_c) >= 0x40 && (_c) <= 0x7E)
 
         while (IS_DELIM(c)) {
-            if (c == '?') { this->priv = 1; }
+            if (c == '?')      { this->priv = 1;          }
+            else if (c == ';') { this->args.push_back(0); }
             NEXT();
         }
 
@@ -482,6 +494,7 @@ struct Term {
     int                slave_fd       = 0;
     pid_t              shell_pid      = 0;
     int                process_exited = 0;
+    int                bad_shell      = 0;
     std::thread        thr;
     std::mutex         buff_lock;
     std::vector<char>  data_buff;
@@ -493,23 +506,16 @@ struct Term {
     int                app_keys       = 0;
     std::string        title;
 
-
     static void read_thread(Term *term) {
         ssize_t n;
         char    buff[512];
-        int     status;
 
         for (;;) {
-            if ((n = read(term->master_fd, buff, sizeof(buff))) == 0) {
-                term->process_exited = 1;
-                yed_force_update();
-                break;
-            }
 
-            if (n < 0) {
-                LOG("read() failed with errno %d", errno);
-                errno = 0;
-                return;
+            if ((n = read(term->master_fd, buff, sizeof(buff))) <= 0) {
+                errno                = 0;
+                term->process_exited = 1;
+                break;
             }
 
             { std::lock_guard<std::mutex> lock(term->buff_lock);
@@ -521,6 +527,8 @@ struct Term {
 
             yed_force_update();
         }
+
+        yed_force_update();
     }
 
     Screen& screen() { return *this->_screen; }
@@ -536,7 +544,7 @@ struct Term {
         ws.ws_ypixel = 0;
 
         if (ioctl(this->slave_fd, TIOCSWINSZ, &ws) == -1) {
-            LOG("ioctl(TIOCSWINSZ) failed with errno = %d", errno);
+            ELOG("ioctl(TIOCSWINSZ) failed with errno = %d", errno);
             return;
         }
 
@@ -575,7 +583,7 @@ struct Term {
         ws.ws_ypixel = 0;
 
         if (openpty(&this->master_fd, &this->slave_fd, NULL, NULL, &ws) != 0) {
-            LOG("openpty() failed with errno = %d", errno);
+            ELOG("openpty() failed with errno = %d", errno);
             errno = 0;
             return;
         }
@@ -583,34 +591,26 @@ struct Term {
         p = fork();
         if (p == 0) {
             close(this->master_fd);
-
-            setsid();
-
-            if (ioctl(this->slave_fd, TIOCSCTTY, NULL) == -1) {
-                DBG("ioctl(TIOCSCTTY) failed with errno = %d\n", errno);
-                return;
-            }
-
-            dup2(this->slave_fd, 0);
-            dup2(this->slave_fd, 1);
-            dup2(this->slave_fd, 2);
-            close(this->slave_fd);
+            login_tty(this->slave_fd);
 
             char * const args[] = { (char*)get_shell(), NULL };
             execvp(get_shell(), args);
+            exit(123);
         } else {
             this->shell_pid = p;
 
             this->resize(DEFAULT_WIDTH, DEFAULT_HEIGHT);
             this->set_cursor(1, 1);
 
-            thr = std::thread(this->read_thread, this);
+            thr = std::thread(Term::read_thread, this);
 
             this->valid = 1;
         }
     }
 
     ~Term() {
+        close(this->master_fd);
+        close(this->slave_fd);
         thr.join();
         yed_free_buffer(this->buffer);
     }
@@ -1027,6 +1027,8 @@ do {                                      \
             this->data_buff.clear();
         }
 
+        buff.push_back(0);
+
         if (incomplete_csi.size()) {
             for (auto it = incomplete_csi.rbegin(); it != incomplete_csi.rend(); it++) {
                 buff.insert(buff.begin(), *it);
@@ -1047,7 +1049,7 @@ do {                                \
         { BUFF_WRITABLE_GUARD(this->buffer);
 
             char        *s             = buff.data();
-            size_t       len           = buff.size();
+            size_t       len           = buff.size() - 1;
             yed_glyph   *git           = NULL;
             yed_glyph    last          = G(0);
             int          csi_countdown = 0;
@@ -1057,6 +1059,8 @@ do {                                \
                     csi_countdown -= 1;
                     continue;
                 }
+
+                ASSERT(incomplete_csi.size() == 0, "incomplete in middle of stream");
 
                 char *p = &git->c;
                 char  c = *p;
@@ -1068,7 +1072,7 @@ do {                                \
                         debug += c;
                     }
                 } else {
-                    if (c != '\e') {
+                    if (c && c != '\e') {
                         DUMP_DEBUG();
 
                         char pc = 0;
@@ -1110,19 +1114,17 @@ dbg_out:;
                     switch (c) {
                         case '[': {
                             CSI csi(p + 1);
-                            csi_countdown = csi.len;
 
                             DUMP_DEBUG();
 
                             if (csi.complete) {
                                 DBG("CSI: '\\e[%.*s'", csi.len, p + 1);
                                 this->execute_CSI(csi);
+                                csi_countdown = csi.len;
                             } else {
-                                incomplete_csi.clear();
-                                incomplete_csi += "\e[";
-                                for (int i = 0; i < csi.len; i += 1) {
-                                    incomplete_csi += *(p + 1 + i);
-                                }
+                                DBG("INCOMPLETE CSI: '\\e[%.*s'", csi.len, p + 1);
+                                incomplete_csi = p - 1;
+                                csi_countdown = incomplete_csi.size();
                             }
 
                             break;
@@ -1137,6 +1139,7 @@ dbg_out:;
                                 DBG("OSC: '\\e]%.*s'", osc.len, p + 1);
                                 this->execute_OSC(osc);
                             } else {
+                                DBG("INCOMPLETE OSC: '\\e]%.*s'", osc.len, p + 1);
                                 incomplete_csi.clear();
                                 incomplete_csi += "\e]";
                                 for (int i = 0; i < osc.len; i += 1) {
@@ -1147,6 +1150,12 @@ dbg_out:;
                         }
                         case '#':
                             dectst = 1;
+                            break;
+                        case '=':
+                            /* Ignore DECKPAM. */
+                            break;
+                        case '>':
+                            /* Ignore DECKPNM. */
                             break;
                         case '8':
                             this->set_cursor(1, 1);
@@ -1181,7 +1190,9 @@ dbg_out:;
 
                 switch (c) {
                     case 0:
+                        break;
                     case '\e':
+                        if (!*(p + 1)) { incomplete_csi = "\e"; }
                         break;
                     case '\r':
                         this->set_cursor(this->row(), 1);
@@ -1364,6 +1375,11 @@ static void update(yed_event *event) {
         Term *t = *it;
 
         if (t->process_exited) {
+            if (t->bad_shell) {
+                LOG_CMD_ENTER("yed-terminal");
+                yed_cerr("Failed to start shell '%s'", get_shell());
+                LOG_EXIT();
+            }
             delete t;
             it = state->terms.erase(it);
             it--;
@@ -1464,6 +1480,24 @@ static void fit(yed_event *event) {
     }
 }
 
+static void sig(yed_event *event) {
+    int status;
+
+    if (event->signum != SIGCHLD) { return; }
+
+    for (auto t : state->terms) {
+        if (waitpid(t->shell_pid, &status, WNOHANG)) {
+            if (WIFEXITED(status)) {
+                t->process_exited = 1;
+                if (WEXITSTATUS(status) == 123) {
+                    t->bad_shell = 1;
+                }
+                break;
+            }
+        }
+    }
+}
+
 static void term_new_cmd(int n_args, char **args) {
     Term *t = state->new_term();
     YEXE("buffer", t->buffer->name);
@@ -1488,6 +1522,7 @@ static yed_event_handler tresize_handler;
 static yed_event_handler del_handler;
 static yed_event_handler pre_buff_set_handler;
 static yed_event_handler post_buff_set_handler;
+static yed_event_handler sig_handler;
 
 extern "C"
 int yed_plugin_boot(yed_plugin *self) {
@@ -1543,6 +1578,10 @@ int yed_plugin_boot(yed_plugin *self) {
     post_buff_set_handler.kind = EVENT_FRAME_POST_SET_BUFFER;
     post_buff_set_handler.fn   = fit;
     yed_plugin_add_event_handler(self, post_buff_set_handler);
+
+    sig_handler.kind = EVENT_SIGNAL_RECEIVED;
+    sig_handler.fn   = sig;
+    yed_plugin_add_event_handler(self, sig_handler);
 
     yed_plugin_set_command(self, "term-new", term_new_cmd);
     yed_plugin_set_command(self, "toggle-term-mode", toggle_term_mode_cmd);
