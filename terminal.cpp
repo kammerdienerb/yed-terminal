@@ -60,31 +60,33 @@ struct {
 
 
 
-/* #define DBG_LOG_ON */
+#define DBG_LOG_ON
 
 #define LOG__XSTR(x) #x
 #define LOG_XSTR(x) LOG__XSTR(x)
 
-#define LOG(...)                                               \
-do {                                                           \
-    LOG_FN_ENTER();                                            \
-    yed_log(__VA_ARGS__);                                      \
-    LOG_EXIT();                                                \
+#define LOG(...)                                                   \
+do {                                                               \
+    LOG_FN_ENTER();                                                \
+    yed_log(__VA_ARGS__);                                          \
+    LOG_EXIT();                                                    \
 } while (0)
 
-#define ELOG(...)                                              \
-do {                                                           \
-    LOG_FN_ENTER();                                            \
-    yed_log("[!] " __VA_ARGS__);                               \
-    LOG_EXIT();                                                \
+#define ELOG(...)                                                  \
+do {                                                               \
+    LOG_FN_ENTER();                                                \
+    yed_log("[!] " __VA_ARGS__);                                   \
+    LOG_EXIT();                                                    \
 } while (0)
 
 #ifdef DBG_LOG_ON
-#define DBG(...)                                               \
-do {                                                           \
-    LOG_FN_ENTER();                                            \
-    yed_log(__FILE__ ":" LOG_XSTR(__LINE__) ": " __VA_ARGS__); \
-    LOG_EXIT();                                                \
+#define DBG(...)                                                   \
+do {                                                               \
+    if (yed_var_is_truthy("terminal-debug-log")) {                 \
+        LOG_FN_ENTER();                                            \
+        yed_log(__FILE__ ":" LOG_XSTR(__LINE__) ": " __VA_ARGS__); \
+        LOG_EXIT();                                                \
+    }                                                              \
 } while (0)
 #else
 #define DBG(...) ;
@@ -95,13 +97,16 @@ do {                                                           \
     defer { (_buff)->flags |= BUFF_RD_ONLY; };
 
 
+#define MODE_RESET ('!')
+#define MODE_PRIV  ('?')
+#define MODE_XTERM ('>')
 
 struct CSI {
     std::vector<long> args;
     int               command  = 0;
     int               len      = 0;
     int               complete = 0;
-    int               priv     = 0;
+    int               mode     = 0;
 
     CSI(const char *str) {
         char c;
@@ -120,12 +125,16 @@ do {                      \
     this->len += 1;       \
 } while (0)
 
-#define IS_DELIM(_c) ((_c) == ';' || (_c) == ':' || (_c) == '?' || (_c) == ' ')
+#define IS_DELIM(_c) ((_c) == ';' || (_c) == ':' || (_c) == '?' || (_c) == ' ' || (_c) == '>' || (c) == '!')
 #define IS_FINAL(_c) ((_c) >= 0x40 && (_c) <= 0x7E)
 
         while (IS_DELIM(c)) {
-            if (c == '?')      { this->priv = 1;          }
-            else if (c == ';') { this->args.push_back(0); }
+            switch (c) {
+                case '!': this->mode = MODE_RESET; break;
+                case '?': this->mode = MODE_PRIV;  break;
+                case '>': this->mode = MODE_XTERM; break;
+                case ';': this->args.push_back(0); break;
+            }
             NEXT();
         }
 
@@ -186,7 +195,7 @@ do {                      \
 
         sscanf(scmd.c_str(), "%ld", &this->command);
 
-        if (c != ';') { goto out; }
+        if (c != ';' && c != CTRL_G) { goto out; }
 
         while (c && c != CTRL_G) {
             if (c == '\e') {
@@ -210,6 +219,10 @@ struct Cell {
 
     Cell() { }
 
+    Cell(yed_attrs a) {
+        this->attrs = a;
+    }
+
     Cell(yed_glyph g, yed_attrs a) {
         this->glyph = g;
         this->attrs = a;
@@ -219,13 +232,13 @@ struct Cell {
 struct Line : std::vector<Cell> {
     int dirty = 0;
 
-    void clear_cells(int width) {
+    void clear_cells(int width, yed_attrs attrs) {
         this->resize(width);
-        std::fill(this->begin(), this->end(), Cell());
+        std::fill(this->begin(), this->end(), Cell(attrs));
     }
 
-    Line(int width) {
-        this->clear_cells(width);
+    Line(int width, yed_attrs attrs) {
+        this->clear_cells(width, attrs);
     }
 };
 
@@ -234,15 +247,16 @@ struct Line : std::vector<Cell> {
 #define DEFAULT_SCROLLBACK      (10000)
 
 struct Screen : std::vector<Line> {
-    int width      = 0;
-    int height     = 0;
-    int cursor_row = 1;
-    int cursor_col = 1;
-    int scroll_t   = 0;
-    int scroll_b   = 0;
-    int scrollback = DEFAULT_SCROLLBACK;
+    int        width      = 0;
+    int        height     = 0;
+    int        cursor_row = 1;
+    int        cursor_col = 1;
+    int        scroll_t   = 0;
+    int        scroll_b   = 0;
+    int        scrollback = DEFAULT_SCROLLBACK;
+    yed_attrs &attrs;
 
-    Screen() { }
+    Screen(yed_attrs &_attrs) : attrs(_attrs) { }
 
     void set_cursor(int row, int col) {
         this->cursor_row = row; LIMIT(this->cursor_row, 1, this->height);
@@ -269,7 +283,7 @@ struct Screen : std::vector<Line> {
         num_lines = height + this->scrollback;
 
         if (num_lines > this->size()) {
-            this->resize(num_lines, Line(width));
+            this->resize(num_lines, Line(width, this->attrs));
         } else {
             while (this->size() > num_lines) {
                 this->erase(this->begin());
@@ -306,7 +320,7 @@ struct Screen : std::vector<Line> {
     int sctop()    { return this->scroll_t ? this->scroll_t : 1;            }
     int scbottom() { return this->scroll_b ? this->scroll_b : this->height; }
 
-    void set(int row, int col, yed_glyph g, yed_attrs a) {
+    void set(int row, int col, yed_glyph g) {
         if (row > this->height || col > this->width) { return; }
 
         auto &line = (*this)[this->scrollback + row - 1];
@@ -318,25 +332,25 @@ struct Screen : std::vector<Line> {
         for (int i = 0; i < width; i += 1) {
             if (col + i > this->width) { break; }
             auto &cell = line[col - 1 + i];
-            cell.attrs = a;
+            cell.attrs = this->attrs;
         }
 
         line.dirty = 1;
     }
 
-    void set_current_cell(yed_glyph g, yed_attrs a) {
-        this->set(this->cursor_row, this->cursor_col, g, a);
+    void set_current_cell(yed_glyph g) {
+        this->set(this->cursor_row, this->cursor_col, g);
     }
 
     void del_cell(int row, int col) {
         auto &line = (*this)[this->scrollback + row - 1];
         line.erase(line.begin() + col - 1);
-        line.emplace_back();
+        line.emplace_back(this->attrs);
     }
 
     void clear_row_abs(int row) {
         auto &line = (*this)[row - 1];
-        line.clear_cells(this->width);
+        line.clear_cells(this->width, this->attrs);
         line.dirty = 1;
     }
 
@@ -350,9 +364,9 @@ struct Screen : std::vector<Line> {
 
         this->erase(this->begin() + del_row - 1);
         if (new_row > this->size()) {
-            this->emplace_back(this->width);
+            this->emplace_back(this->width, this->attrs);
         } else {
-            this->emplace(this->begin() + new_row - 1, this->width);
+            this->emplace(this->begin() + new_row - 1, this->width, this->attrs);
         }
 
         this->make_line_dirty_abs(new_row);
@@ -378,7 +392,7 @@ struct Screen : std::vector<Line> {
         int new_row = this->scroll_t ? this->scrollback + this->scroll_t : 1;
 
         this->erase(this->begin() + del_row - 1);
-        this->emplace(this->begin() + new_row - 1, this->width);
+        this->emplace(this->begin() + new_row - 1, this->width, this->attrs);
         this->make_line_dirty_abs(new_row);
 
         { BUFF_WRITABLE_GUARD(buffer);
@@ -403,9 +417,9 @@ struct Screen : std::vector<Line> {
 
         this->erase(this->begin() + del_row - 1);
         if (new_row > this->size()) {
-            this->emplace_back(this->width);
+            this->emplace_back(this->width, this->attrs);
         } else {
-            this->emplace(this->begin() + new_row - 1, this->width);
+            this->emplace(this->begin() + new_row - 1, this->width, this->attrs);
         }
 
         this->make_line_dirty_abs(new_row);
@@ -431,7 +445,7 @@ struct Screen : std::vector<Line> {
         int new_row = this->scrollback + this->scbottom();
 
         this->erase(this->begin() + del_row - 1);
-        this->emplace(this->begin() + new_row - 1, this->width);
+        this->emplace(this->begin() + new_row - 1, this->width, this->attrs);
         this->make_line_dirty_abs(new_row);
 
         { BUFF_WRITABLE_GUARD(buffer);
@@ -459,7 +473,8 @@ struct Screen : std::vector<Line> {
                 int n = line.size();
 
                 for (; n >= 1; n -= 1) {
-                    if (line[n - 1].glyph.c != 0) { break; }
+                    if (line[n - 1].glyph.c     != 0
+                    ||  line[n - 1].attrs.flags != 0) { break; }
                 }
 
                 yed_line_clear_no_undo(buffer, row);
@@ -476,7 +491,7 @@ struct Screen : std::vector<Line> {
 };
 
 #define DEFAULT_SHELL   "/bin/bash"
-#define DEFAULT_TERMVAR "screen"
+#define DEFAULT_TERMVAR "xterm-256color"
 
 const char *get_shell() {
     const char *shell;
@@ -490,7 +505,13 @@ const char *get_shell() {
 }
 
 const char *get_termvar() {
-    return DEFAULT_TERMVAR;
+    const char *termvar;
+
+    termvar = yed_get_var("terminal-termvar");
+
+    if (termvar == NULL) { termvar = DEFAULT_TERMVAR; }
+
+    return termvar;
 }
 
 
@@ -511,6 +532,7 @@ struct Term {
     Screen            *_screen        = NULL;
     int                app_keys       = 0;
     std::string        title;
+    int                term_mode      = 1;
 
     static void read_thread(Term *term) {
         ssize_t n;
@@ -575,7 +597,10 @@ struct Term {
     }
 
 
-    Term(u32 num) : _screen(&this->main_screen) {
+    Term(u32 num) : main_screen(this->current_attrs),
+                    alt_screen(this->current_attrs),
+                    _screen(&this->main_screen) {
+
         char           name[64];
         pid_t          p;
         struct winsize ws;
@@ -672,13 +697,11 @@ TERM_BLUE
     }
 
     void set_cell(int row, int col, yed_glyph g) {
-        auto attrs = g.c ? this->current_attrs : ZERO_ATTR;
-        this->screen().set(row, col, g, attrs);
+        this->screen().set(row, col, g);
     }
 
     void set_current_cell(yed_glyph g) {
-        auto attrs = g.c ? this->current_attrs : ZERO_ATTR;
-        this->screen().set_current_cell(g, attrs);
+        this->screen().set_current_cell(g);
     }
 
     void delete_cell(int row, int col) {
@@ -704,8 +727,10 @@ TERM_BLUE
     void execute_CSI(CSI &csi) {
         long val;
 
-#define PRIV_ENC(_cmd, _priv) ((_cmd) | ((_priv) << 31))
-#define PRIV(_cmd)            PRIV_ENC((_cmd), 1)
+#define ENC(_cmd, _mode) ((_cmd) | ((_mode) << 24))
+#define RESET(_cmd)      ENC((_cmd), MODE_RESET)
+#define PRIV(_cmd)       ENC((_cmd), MODE_PRIV)
+#define XTERM(_cmd)      ENC((_cmd), MODE_XTERM)
 
 #define SHIFT()                           \
 do {                                      \
@@ -714,7 +739,13 @@ do {                                      \
     }                                     \
 } while (0)
 
-        switch (PRIV_ENC(csi.command, csi.priv)) {
+        /* Resources:
+         *     https://invisible-island.net/xterm/ctlseqs/ctlseqs.html
+         *     https://vt100.net/docs
+         *     http://www.xfree86.org/4.5.0/ctlseqs.html
+         */
+
+        switch (ENC(csi.command, csi.mode)) {
             case '@':
                 val = csi.args.size() ? csi.args[0] : 1;
                 for (int i = 0; i < val; i += 1) {
@@ -732,6 +763,11 @@ do {                                      \
                 break;
             case 'c': {
                 const char *id = "\e[?6c";
+                write(this->master_fd, id, strlen(id));
+                break;
+            }
+            case XTERM('c'): { /* Send device attributes. */
+                const char *id = "\e[>0;0;0c";
                 write(this->master_fd, id, strlen(id));
                 break;
             }
@@ -846,6 +882,12 @@ do {                                      \
                     case 3:
                         this->reset();
                         break;
+                    case 12:
+                        /* Ignore blinking cursor. */
+                        break;
+                    case 25:
+                        /* Ignore cursor show/hide. */
+                        break;
                     case 1049:
                         this->_screen = &this->alt_screen;
                         this->screen().make_dirty();
@@ -865,6 +907,12 @@ do {                                      \
                         break;
                     case 3:
                         this->reset();
+                        break;
+                    case 12:
+                        /* Ignore blinking cursor. */
+                        break;
+                    case 25:
+                        /* Ignore cursor show/hide. */
                         break;
                     case 1049:
                         this->_screen = &this->main_screen;
@@ -990,12 +1038,48 @@ do {                                      \
                         case 49:
                             this->current_attrs.bg = 0;
                             break;
-
+                        case 90: case 91: case 92: case 93: case 94: case 95: case 96: case 97:
+                            this->current_attrs.flags |= ATTR_16 | ATTR_16_LIGHT_FG;
+                            this->current_attrs.fg     = cmd - 60;
+                            break;
+                        case 100: case 101: case 102: case 103: case 104: case 105: case 106: case 107:
+                            this->current_attrs.flags |= ATTR_16 | ATTR_16_LIGHT_BG;
+                            this->current_attrs.bg     = cmd - 70;
+                            break;
                         default:
                             goto unhandled;
                             break;
                     }
                 }
+                break;
+            case XTERM('m'):
+                /* Ignore xterm key modifier options. */
+                break;
+            case 'n':
+                val = csi.args.size() ? csi.args[0] : 0;
+                switch (val) {
+                    case '5': /* Report status OK. */
+                        write(this->master_fd, "\e[0n", 4);
+                        break;
+                    case '6': { /* Report cursor location. */
+                        auto response =    "\e["
+                                         + std::to_string(this->row())
+                                         + ";"
+                                         + std::to_string(this->col())
+                                         + "R";
+                        write(this->master_fd, response.c_str(), response.size());
+                        break;
+                    }
+                }
+                break;
+            case RESET('p'):
+                this->current_attrs = ZERO_ATTR;
+                this->set_cursor(1, 1);
+                this->set_scroll(0, 0);
+                this->clear_page();
+                this->app_keys = 0;
+                this->_screen = &this->main_screen;
+                this->main_screen.make_dirty();
                 break;
             case 'r':
                 /* Set scrolling region. */
@@ -1027,6 +1111,26 @@ do {                                      \
                     this->scroll_down();
                 }
                 break;
+            case 't':
+                SHIFT();
+                switch (csi.args.size()) {
+                    case 2:
+                        /* Ignore bell volume. */
+                        break;
+                    case 3:
+                        /* Ignore xterm window manipulations. */
+                        break;
+                }
+                break;
+            case XTERM('t'):
+                /* Ignore xterm title mode controls. */
+                break;
+            case 'X':
+                val = csi.args.size() ? csi.args[0] : 1;
+                for (int i = 0; i < val; i += 1) {
+                    this->set_cell(this->row(), this->col() + i, G(0));
+                }
+                break;
             default:
                 DBG("  UNRECOGNIZED CSI");
             unhandled:;
@@ -1041,6 +1145,22 @@ do {                                      \
             case 0:
                 this->title = osc.arg;
                 break;
+            case 4: case 10: case 11: {
+                if (osc.arg == "?") {
+                    char buff[128];
+                    snprintf(buff, sizeof(buff),
+                            "\e]%ld;rgb:%d%d/%d%d/%d%d\a",
+                            osc.command,
+                            0xff, 0xff,
+                            0xff, 0xff,
+                            0xff, 0xff);
+                    write(this->master_fd, buff, strlen(buff));
+                }
+                break;
+            }
+            case 104: case 110: case 111:
+                /* Ignore color reset. */
+                break;
             default:
                 DBG("  UNRECOGNIZED OSC");
             unhandled:;
@@ -1051,7 +1171,8 @@ do {                                      \
     void update() {
         std::vector<char>  buff;
         static std::string incomplete_csi;
-        int                dectst = 0;
+        int                dectst     = 0;
+        int                setcharset = 0;
 
         { std::lock_guard<std::mutex> lock(this->buff_lock);
 
@@ -1134,13 +1255,14 @@ dbg_out:;
                                 }
                             }
                             break;
-                        default:;
-                            goto next;
-                            break;
                     }
+                    dectst = 0;
+                    goto next;
+                } else if (setcharset) {
+                    /* Ignore character set setting. */
+                    setcharset = 0;
+                    goto next;
                 }
-
-                dectst = 0;
 
                 if (last.c == '\e') {
                     switch (c) {
@@ -1188,6 +1310,9 @@ dbg_out:;
                             break;
                         case '>':
                             /* Ignore DECKPNM. */
+                            break;
+                        case '(':
+                            setcharset = 1;
                             break;
                         case '8':
                             this->set_cursor(1, 1);
@@ -1420,12 +1545,19 @@ out:;
             col += 1;
         }
     }
+
+    void toggle_term_mode() {
+        this->term_mode = !this->term_mode;
+    }
 };
 
 struct State {
     u32                       term_counter = 0;
     std::list<Term*>          terms;
     std::map<yed_frame*, int> save_scroll_offsets;
+    std::map<yed_frame*, int> term_mode_off;
+    int                       key_sequences_saved = 0;
+    array_t                   key_sequences;
 
     State() { }
 
@@ -1451,14 +1583,54 @@ static Term * term_for_buffer(yed_buffer *buffer) {
     return NULL;
 }
 
-static int term_mode;
+static void set_term_keys() {
+    ASSERT(!state->key_sequences_saved, "key sequence save/restore mismatch");
 
-static void toggle_term_mode(void) {
-    term_mode = !term_mode;
+    state->key_sequences       = ys->key_sequences;
+    ys->key_sequences          = array_make(yed_key_sequence);
+    state->key_sequences_saved = 1;
+}
+
+static void restore_normal_keys() {
+    ASSERT(state->key_sequences_saved, "key sequence save/restore mismatch");
+
+    array_free(ys->key_sequences);
+    ys->key_sequences          = state->key_sequences;
+    state->key_sequences_saved = 0;
+}
+
+static void toggle_term_mode(Term *t) {
+    if (t->term_mode) {
+        restore_normal_keys();
+    } else {
+        set_term_keys();
+    }
+
+    t->toggle_term_mode();
 }
 
 static void update(yed_event *event) {
-    if (!term_mode) { return; }
+    static std::vector<yed_direct_draw_t*>   dds;
+    yed_frame                              **fit;
+    yed_frame                               *f;
+
+    for (auto dd : dds) { yed_kill_direct_draw(dd); }
+    dds.clear();
+
+    array_traverse(ys->frames, fit) {
+        f = *fit;
+        if (auto t = term_for_buffer(f->buffer)) {
+            if (!t->term_mode) {
+                const char *s = " term-mode: OFF ";
+                int row       = f->top + 1;
+                int col       = f->left + f->width - 1 - strlen(s);
+                auto attrs    = yed_parse_attrs("&bad inverse");
+                auto dd       = yed_direct_draw(row, col, attrs, s);
+
+                dds.push_back(dd);
+            }
+        }
+    }
 
     for (auto it = state->terms.begin(); it != state->terms.end(); it++) {
         Term *t = *it;
@@ -1473,41 +1645,37 @@ static void update(yed_event *event) {
             it = state->terms.erase(it);
             it--;
         } else {
-            t->update();
+            if (t->term_mode) {
+                t->update();
+            }
         }
     }
 }
 
 static void key(yed_event *event) {
-    static int ignore;
-    int        len;
-    int        keys[MAX_SEQ_LEN];
+    int len;
+    int keys[MAX_SEQ_LEN];
 
-    if (!term_mode
-    ||  ys->interactive_command
-    ||  ignore
+    if (ys->interactive_command
     ||  !ys->active_frame
     ||  IS_MOUSE(event->key)) {
 
-        ignore = 0;
         return;
     }
 
-    if (yed_get_real_keys(event->key, &len, keys)) {
-        if (auto t = term_for_buffer(ys->active_frame->buffer)) {
-            if (event->key == CTRL_T) {
-                toggle_term_mode();
-                event->cancel = 1;
-                return;
-            }
+    auto t = term_for_buffer(ys->active_frame->buffer);
+    if (t == NULL || !t->term_mode) { return; }
 
-            t->keys(len, keys);
+    if (yed_get_real_keys(event->key, &len, keys)) {
+        if (event->key == CTRL_T) {
+            toggle_term_mode(t);
             event->cancel = 1;
             return;
         }
-    }
 
-    event->cancel = 0;
+        t->keys(len, keys);
+        event->cancel = 1;
+    }
 }
 
 static void line(yed_event *event) {
@@ -1587,31 +1755,72 @@ static void sig(yed_event *event) {
     }
 }
 
+static void activated(yed_event *event) {
+    auto t = term_for_buffer(event->frame->buffer);
+    if (t == NULL) { return; }
+
+    if (!t->term_mode
+    &&  yed_var_is_truthy("terminal-auto-term-mode")) {
+        toggle_term_mode(t);
+    }
+}
+
+static void focus(yed_event *event) {
+    int         from_term = 0;
+    int         to_term   = 0;
+    yed_buffer *to_buff   = NULL;
+
+    if (event->kind == EVENT_FRAME_PRE_SET_BUFFER) {
+        if (event->frame == ys->active_frame) {
+            if (auto t = term_for_buffer(event->frame->buffer)) {
+                if (t->term_mode) {  from_term = 1; }
+            }
+        }
+
+        to_buff = event->buffer;
+    } else if (event->kind == EVENT_FRAME_PRE_ACTIVATE) {
+        if (ys->active_frame != NULL) {
+            if (auto t = term_for_buffer(ys->active_frame->buffer)) {
+                if (t->term_mode) {  from_term = 1; }
+            }
+        }
+
+        to_buff = event->frame->buffer;
+    }
+
+    if (auto t = term_for_buffer(event->buffer)) {
+        if (t->term_mode) {  to_term = 1; }
+    }
+
+    if (from_term != to_term) {
+        if (to_term) {
+            set_term_keys();
+        } else {
+            restore_normal_keys();
+        }
+    }
+}
+
 static void term_new_cmd(int n_args, char **args) {
     Term *t = state->new_term();
     YEXE("buffer", t->buffer->name);
-    term_mode = 1;
 }
 
 static void toggle_term_mode_cmd(int n_args, char **args) {
-    toggle_term_mode();
+    if (ys->active_frame == NULL) {
+        yed_cerr("no active frame");
+        return;
+    }
+
+    if (auto t = term_for_buffer(ys->active_frame->buffer)) {
+        toggle_term_mode(t);
+    } else {
+        yed_cerr("active frame does not have a terminal buffer in it");
+        return;
+    }
 }
 
-static void unload(yed_plugin *self) {
-
-}
-
-
-static yed_event_handler draw_handler;
-static yed_event_handler key_handler;
-static yed_event_handler line_handler;
-static yed_event_handler row_handler;
-static yed_event_handler fresize_handler;
-static yed_event_handler tresize_handler;
-static yed_event_handler del_handler;
-static yed_event_handler pre_buff_set_handler;
-static yed_event_handler post_buff_set_handler;
-static yed_event_handler sig_handler;
+static void unload(yed_plugin *self) { }
 
 extern "C"
 int yed_plugin_boot(yed_plugin *self) {
@@ -1628,52 +1837,43 @@ int yed_plugin_boot(yed_plugin *self) {
         yed_set_var(STATE_ADDR_VAR_NAME, addr_buff);
     }
 
-    if (!yed_get_var("terminal-shell")) {
-        yed_set_var("terminal-shell", (char*)get_shell());
+    std::map<const char*, const char*> vars = {
+        { "terminal-shell",          get_shell()   },
+        { "terminal-termvar",        get_termvar() },
+        { "terminal-auto-term-mode", "ON"          }};
+
+    std::map<const char*, void(*)(int, char**)> cmds = {
+        { "term-new",         term_new_cmd         },
+        { "toggle-term-mode", toggle_term_mode_cmd }};
+
+    std::map<void(*)(yed_event*), std::vector<yed_event_kind_t> > event_handlers = {
+        { update,    { EVENT_PRE_DRAW_EVERYTHING                            } },
+        { key,       { EVENT_KEY_PRESSED                                    } },
+        { line,      { EVENT_LINE_PRE_DRAW                                  } },
+        { row,       { EVENT_ROW_PRE_CLEAR                                  } },
+        { fit,       { EVENT_FRAME_POST_RESIZE, EVENT_TERMINAL_RESIZED,
+                       EVENT_FRAME_POST_DELETE, EVENT_FRAME_PRE_SET_BUFFER,
+                       EVENT_FRAME_POST_SET_BUFFER,                         } },
+        { sig,       { EVENT_SIGNAL_RECEIVED                                } },
+        { activated, { EVENT_FRAME_ACTIVATED                                } },
+        { focus,     { EVENT_FRAME_PRE_SET_BUFFER, EVENT_FRAME_PRE_ACTIVATE } }};
+
+    for (auto &pair : vars) {
+        if (!yed_get_var(pair.first)) { yed_set_var(pair.first, pair.second); }
     }
 
-    draw_handler.kind = EVENT_PRE_DRAW_EVERYTHING;
-    draw_handler.fn   = update;
-    yed_plugin_add_event_handler(self, draw_handler);
+    for (auto &pair : cmds) {
+        yed_plugin_set_command(self, pair.first, pair.second);
+    }
 
-    key_handler.kind = EVENT_KEY_PRESSED;
-    key_handler.fn   = key;
-    yed_plugin_add_event_handler(self, key_handler);
-
-    line_handler.kind = EVENT_LINE_PRE_DRAW;
-    line_handler.fn   = line;
-    yed_plugin_add_event_handler(self, line_handler);
-
-    row_handler.kind = EVENT_ROW_PRE_CLEAR;
-    row_handler.fn   = row;
-    yed_plugin_add_event_handler(self, row_handler);
-
-    fresize_handler.kind = EVENT_FRAME_POST_RESIZE;
-    fresize_handler.fn   = fit;
-    yed_plugin_add_event_handler(self, fresize_handler);
-
-    tresize_handler.kind = EVENT_TERMINAL_RESIZED;
-    tresize_handler.fn   = fit;
-    yed_plugin_add_event_handler(self, tresize_handler);
-
-    del_handler.kind = EVENT_FRAME_POST_DELETE;
-    del_handler.fn   = fit;
-    yed_plugin_add_event_handler(self, del_handler);
-
-    pre_buff_set_handler.kind = EVENT_FRAME_PRE_SET_BUFFER;
-    pre_buff_set_handler.fn   = fit;
-    yed_plugin_add_event_handler(self, pre_buff_set_handler);
-
-    post_buff_set_handler.kind = EVENT_FRAME_POST_SET_BUFFER;
-    post_buff_set_handler.fn   = fit;
-    yed_plugin_add_event_handler(self, post_buff_set_handler);
-
-    sig_handler.kind = EVENT_SIGNAL_RECEIVED;
-    sig_handler.fn   = sig;
-    yed_plugin_add_event_handler(self, sig_handler);
-
-    yed_plugin_set_command(self, "term-new", term_new_cmd);
-    yed_plugin_set_command(self, "toggle-term-mode", toggle_term_mode_cmd);
+    for (auto &pair : event_handlers) {
+        for (auto evt : pair.second) {
+            yed_event_handler h;
+            h.kind = evt;
+            h.fn   = pair.first;
+            yed_plugin_add_event_handler(self, h);
+        }
+    }
 
     yed_plugin_set_unload_fn(self, unload);
 
