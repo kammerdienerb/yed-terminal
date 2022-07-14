@@ -1779,6 +1779,7 @@ static void focus(yed_event *event) {
 
         to_buff = event->buffer;
     } else if (event->kind == EVENT_FRAME_PRE_ACTIVATE) {
+        if (event->frame == ys->active_frame) { return; }
         if (ys->active_frame != NULL) {
             if (auto t = term_for_buffer(ys->active_frame->buffer)) {
                 if (t->term_mode) {  from_term = 1; }
