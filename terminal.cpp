@@ -569,7 +569,7 @@ struct Term {
 
     static void read_thread(Term *term) {
         ssize_t n;
-        char    buff[4096];
+        char    buff[512];
 
         for (;;) {
 
@@ -1882,6 +1882,7 @@ static void focus(yed_event *event) {
 
 static void term_new_cmd(int n_args, char **args) {
     Term *t = state->new_term();
+    YEXE("special-buffer-prepare-focus", t->buffer->name);
     YEXE("buffer", t->buffer->name);
 }
 
