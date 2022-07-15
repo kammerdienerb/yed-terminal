@@ -14,6 +14,7 @@
 #include <fcntl.h>
 #include <ctype.h>
 #include <climits>
+#include <type_traits>
 
 #ifdef __APPLE__
 #include <util.h>
@@ -214,19 +215,8 @@ out:;
 };
 
 struct Cell {
-    yed_glyph glyph = G(0);
-    yed_attrs attrs = ZERO_ATTR;
-
-    Cell() { }
-
-    Cell(yed_attrs a) {
-        this->attrs = a;
-    }
-
-    Cell(yed_glyph g, yed_attrs a) {
-        this->glyph = g;
-        this->attrs = a;
-    }
+    yed_glyph glyph;
+    yed_attrs attrs;
 };
 
 struct Line : std::vector<Cell> {
@@ -234,7 +224,10 @@ struct Line : std::vector<Cell> {
 
     void clear_cells(int width, yed_attrs attrs) {
         this->resize(width);
-        std::fill(this->begin(), this->end(), Cell(attrs));
+        for (auto &cell : *this) {
+            cell.glyph = G(0);
+            cell.attrs = attrs;
+        }
     }
 
     Line(int width, yed_attrs attrs) {
@@ -246,21 +239,25 @@ struct Line : std::vector<Cell> {
 #define DEFAULT_HEIGHT          (24)
 #define DEFAULT_SCROLLBACK      (10000)
 
-struct Screen : std::vector<Line> {
-    int        width           = 0;
-    int        height          = 0;
-    int        cursor_row      = 1;
-    int        cursor_col      = 1;
-    int        cursor_row_save = 1;
-    int        cursor_col_save = 1;
-    yed_attrs  attrs_save      = ZERO_ATTR;
-    int        cursor_saved    = 0;
-    int        scroll_t        = 0;
-    int        scroll_b        = 0;
-    int        scrollback      = DEFAULT_SCROLLBACK;
-    yed_attrs &attrs;
+struct Screen {
+    std::vector<Line*> lines;
+    int                width           = 0;
+    int                height          = 0;
+    int                cursor_row      = 1;
+    int                cursor_col      = 1;
+    int                cursor_row_save = 1;
+    int                cursor_col_save = 1;
+    yed_attrs          attrs_save      = ZERO_ATTR;
+    int                cursor_saved    = 0;
+    int                scroll_t        = 0;
+    int                scroll_b        = 0;
+    int                scrollback      = DEFAULT_SCROLLBACK;
+    yed_attrs         &attrs;
 
     Screen(yed_attrs &_attrs) : attrs(_attrs) { }
+
+    Line& operator[](std::size_t idx)             { return *(lines[idx]); }
+    const Line& operator[](std::size_t idx) const { return *(lines[idx]); }
 
     void set_cursor(int row, int col) {
         this->cursor_row = row; LIMIT(this->cursor_row, 1, this->height);
@@ -291,7 +288,13 @@ struct Screen : std::vector<Line> {
     }
 
     void make_dirty() {
-        for (auto &line : *this) { line.dirty = 1; }
+        for (auto linep : this->lines) { linep->dirty = 1; }
+    }
+
+    void _delete_line(int which) {
+        auto linep = this->lines[which];
+        delete linep;
+        this->lines.erase(this->lines.begin() + which);
     }
 
     void set_dimensions(int width, int height) {
@@ -300,24 +303,32 @@ struct Screen : std::vector<Line> {
 
         num_lines = height + this->scrollback;
 
-        if (num_lines > this->size()) {
-            this->resize(num_lines, Line(width, this->attrs));
+        if (num_lines > this->lines.size()) {
+            while (this->lines.size() < num_lines) {
+                this->lines.push_back(new Line(width, this->attrs));
+            }
         } else {
-            while (this->size() > num_lines) {
-                this->erase(this->begin());
+            while (this->lines.size() > num_lines) {
+                this->_delete_line(0);
             }
         }
 
         max_width = width;
-        for (auto &line : *this) {
-            if (line.size() > max_width) {
-                max_width = line.size();
+        for (auto linep : this->lines) {
+            if (linep->size() > max_width) {
+                max_width = linep->size();
             }
         }
 
         if (max_width > this->width) {
-            for (auto &line : *this) {
-                line.resize(max_width, Cell());
+            for (auto linep : this->lines) {
+                auto &line = *linep;
+                line.resize(max_width);
+                for (int i = this->width; i < max_width; i += 1) {
+                    auto &cell = line[i];
+                    cell.glyph = G(0);
+                    cell.attrs = this->attrs;
+                }
             }
         }
 
@@ -363,7 +374,7 @@ struct Screen : std::vector<Line> {
     void del_cell(int row, int col) {
         auto &line = (*this)[this->scrollback + row - 1];
         line.erase(line.begin() + col - 1);
-        line.emplace_back(this->attrs);
+        line.push_back({ G(0), this->attrs });
     }
 
     void clear_row_abs(int row) {
@@ -380,11 +391,11 @@ struct Screen : std::vector<Line> {
         int del_row = this->scroll_t ? this->scrollback + this->scroll_t : 1;
         int new_row = this->scrollback + this->scbottom();
 
-        this->erase(this->begin() + del_row - 1);
-        if (new_row > this->size()) {
-            this->emplace_back(this->width, this->attrs);
+        this->_delete_line(del_row - 1);
+        if (new_row > this->lines.size()) {
+            this->lines.push_back(new Line(this->width, this->attrs));
         } else {
-            this->emplace(this->begin() + new_row - 1, this->width, this->attrs);
+            this->lines.insert(this->lines.begin() + new_row - 1, new Line(this->width, this->attrs));
         }
 
         this->make_line_dirty_abs(new_row);
@@ -402,15 +413,15 @@ struct Screen : std::vector<Line> {
             }
         }
 
-        ASSERT(this->size() == this->scrollback + this->height, "rows mismatch");
+        ASSERT(this->lines.size() == this->scrollback + this->height, "rows mismatch");
     }
 
     void scroll_down(yed_buffer *buffer) {
         int del_row = this->scrollback + this->scbottom();
         int new_row = this->scroll_t ? this->scrollback + this->scroll_t : 1;
 
-        this->erase(this->begin() + del_row - 1);
-        this->emplace(this->begin() + new_row - 1, this->width, this->attrs);
+        this->_delete_line(del_row - 1);
+        this->lines.insert(this->lines.begin() + new_row - 1, new Line(this->width, this->attrs));
         this->make_line_dirty_abs(new_row);
 
         { BUFF_WRITABLE_GUARD(buffer);
@@ -426,18 +437,18 @@ struct Screen : std::vector<Line> {
             }
         }
 
-        ASSERT(this->size() == this->scrollback + this->height, "rows mismatch");
+        ASSERT(this->lines.size() == this->scrollback + this->height, "rows mismatch");
     }
 
     void insert_line(int row, yed_buffer *buffer) {
         int del_row = this->scrollback + this->scbottom();
         int new_row = this->scrollback + row;
 
-        this->erase(this->begin() + del_row - 1);
-        if (new_row > this->size()) {
-            this->emplace_back(this->width, this->attrs);
+        this->_delete_line(del_row - 1);
+        if (new_row > this->lines.size()) {
+            this->lines.push_back(new Line(this->width, this->attrs));
         } else {
-            this->emplace(this->begin() + new_row - 1, this->width, this->attrs);
+            this->lines.insert(this->lines.begin() + new_row - 1, new Line(this->width, this->attrs));
         }
 
         this->make_line_dirty_abs(new_row);
@@ -455,15 +466,15 @@ struct Screen : std::vector<Line> {
             }
         }
 
-        ASSERT(this->size() == this->scrollback + this->height, "rows mismatch");
+        ASSERT(this->lines.size() == this->scrollback + this->height, "rows mismatch");
     }
 
     void delete_line(int row, yed_buffer *buffer) {
         int del_row = this->scrollback + row;
         int new_row = this->scrollback + this->scbottom();
 
-        this->erase(this->begin() + del_row - 1);
-        this->emplace(this->begin() + new_row - 1, this->width, this->attrs);
+        this->_delete_line(del_row - 1);
+        this->lines.insert(this->lines.begin() + new_row - 1, new Line(this->width, this->attrs));
         this->make_line_dirty_abs(new_row);
 
         { BUFF_WRITABLE_GUARD(buffer);
@@ -479,14 +490,15 @@ struct Screen : std::vector<Line> {
             }
         }
 
-        ASSERT(this->size() == this->scrollback + this->height, "rows mismatch");
+        ASSERT(this->lines.size() == this->scrollback + this->height, "rows mismatch");
     }
 
     void write_to_buffer(yed_buffer *buffer) {
         BUFF_WRITABLE_GUARD(buffer);
 
         int row = 1;
-        for (auto &line : *this) {
+        for (auto linep : this->lines) {
+            auto &line = *linep;
             if (line.dirty) {
                 int n = line.size();
 
@@ -598,7 +610,7 @@ struct Term {
         this->alt_screen.set_dimensions(width, height);
 
         { BUFF_WRITABLE_GUARD(this->buffer);
-            int n_rows = this->screen().size();
+            int n_rows = this->screen().lines.size();
             if (yed_buff_n_lines(this->buffer) < n_rows) {
                 while (yed_buff_n_lines(this->buffer) < n_rows) {
                     yed_buff_insert_line_no_undo(this->buffer, 1);
