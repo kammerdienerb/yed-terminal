@@ -247,13 +247,17 @@ struct Line : std::vector<Cell> {
 #define DEFAULT_SCROLLBACK      (10000)
 
 struct Screen : std::vector<Line> {
-    int        width      = 0;
-    int        height     = 0;
-    int        cursor_row = 1;
-    int        cursor_col = 1;
-    int        scroll_t   = 0;
-    int        scroll_b   = 0;
-    int        scrollback = DEFAULT_SCROLLBACK;
+    int        width           = 0;
+    int        height          = 0;
+    int        cursor_row      = 1;
+    int        cursor_col      = 1;
+    int        cursor_row_save = 1;
+    int        cursor_col_save = 1;
+    yed_attrs  attrs_save      = ZERO_ATTR;
+    int        cursor_saved    = 0;
+    int        scroll_t        = 0;
+    int        scroll_b        = 0;
+    int        scrollback      = DEFAULT_SCROLLBACK;
     yed_attrs &attrs;
 
     Screen(yed_attrs &_attrs) : attrs(_attrs) { }
@@ -265,6 +269,20 @@ struct Screen : std::vector<Line> {
 
     void move_cursor(int rows, int cols) {
         this->set_cursor(this->cursor_row + rows, this->cursor_col + cols);
+    }
+
+    void save_cursor() {
+        this->cursor_row_save = this->cursor_row;
+        this->cursor_col_save = this->cursor_col;
+        this->attrs_save      = this->attrs;
+        this->cursor_saved    = 1;
+    }
+
+    void restore_cursor() {
+        this->cursor_row   = this->cursor_row_save;
+        this->cursor_col   = this->cursor_col_save;
+        this->attrs        = this->attrs_save;
+        this->cursor_saved = 0;
     }
 
     void make_line_dirty_abs(int row) {
@@ -536,7 +554,7 @@ struct Term {
 
     static void read_thread(Term *term) {
         ssize_t n;
-        char    buff[512];
+        char    buff[4096];
 
         for (;;) {
 
@@ -674,6 +692,9 @@ TERM_BLUE
 
     void set_cursor(int row, int col)    { this->screen().set_cursor(row, col);    }
     void move_cursor(int rows, int cols) { this->screen().move_cursor(rows, cols); }
+    void save_cursor()                   { this->screen().save_cursor();           }
+    void restore_cursor()                { this->screen().restore_cursor();        }
+    int  cursor_saved()                  { return this->screen().cursor_saved;     }
     void set_scroll(int top, int bottom) { this->screen().set_scroll(top, bottom); }
 
     int row()               { return this->screen().cursor_row;                             }
@@ -872,6 +893,22 @@ do {                                      \
                     this->delete_current_cell();
                 }
                 break;
+            case 'l':
+                val = csi.args.size() ? csi.args[0] : 0;
+                switch (val) {
+                    default:
+                        goto unhandled;
+                        break;
+                }
+                break;
+            case 'h':
+                val = csi.args.size() ? csi.args[0] : 0;
+                switch (val) {
+                    default:
+                        goto unhandled;
+                        break;
+                }
+                break;
             case PRIV('h'):
                 /* DEC Private modes enable. */
                 val = csi.args.size() ? csi.args[0] : 1;
@@ -940,47 +977,56 @@ do {                                      \
                             break;
                         case 2:
                             /* Dim mode ignored. */
+                            goto unhandled;
                             break;
                         case 3:
                             /* Italic mode ignored. */
+                            goto unhandled;
                             break;
                         case 4:
                             this->current_attrs.flags |= ATTR_UNDERLINE;
                             break;
                         case 5:
                             /* Blinking mode ignored. */
+                            goto unhandled;
                             break;
                         case 7:
                             this->current_attrs.flags |= ATTR_INVERSE;
                             break;
                         case 8:
                             /* Hidden mode ignored. */
+                            goto unhandled;
                             break;
                         case 9:
                             /* Strikethrough mode ignored. */
+                            goto unhandled;
                             break;
                         case 22:
                             this->current_attrs.flags &= ~ATTR_BOLD;
                             break;
                         case 23:
                             /* Italic mode ignored. */
+                            goto unhandled;
                             break;
                         case 24:
                             this->current_attrs.flags &= ~ATTR_UNDERLINE;
                             break;
                         case 25:
                             /* Blinking mode ignored. */
+                            goto unhandled;
                             break;
                         case 27:
                             this->current_attrs.flags &= ~ATTR_INVERSE;
                             break;
                         case 28:
                             /* Hidden mode ignored. */
+                            goto unhandled;
                             break;
                         case 29:
                             /* Strikethrough mode ignored. */
                             break;
                         case 30: case 31: case 32: case 33: case 34: case 35: case 36: case 37:
+                            this->current_attrs.flags &= ~ATTR_16_LIGHT_FG;
                             this->current_attrs.flags |= ATTR_16;
                             this->current_attrs.fg     = cmd;
                             break;
@@ -992,13 +1038,13 @@ do {                                      \
                                     auto r = csi.args[0]; SHIFT();
                                     auto g = csi.args[0]; SHIFT();
                                     auto b = csi.args[0]; SHIFT();
-                                    this->current_attrs.flags &= ~(ATTR_16 | ATTR_256);
+                                    this->current_attrs.flags &= ~(ATTR_16 | ATTR_16_LIGHT_FG | ATTR_16_LIGHT_BG | ATTR_256);
                                     this->current_attrs.flags |= ATTR_RGB;
                                     this->current_attrs.fg     = RGB_32(r, g, b);
                                     break;
                                 }
                                 case 5:
-                                    this->current_attrs.flags &= ~(ATTR_16 | ATTR_RGB);
+                                    this->current_attrs.flags &= ~(ATTR_16 | ATTR_16_LIGHT_FG | ATTR_16_LIGHT_BG | ATTR_RGB);
                                     this->current_attrs.flags |= ATTR_256;
                                     this->current_attrs.fg     = csi.args[0];
                                     SHIFT();
@@ -1010,6 +1056,7 @@ do {                                      \
                             this->current_attrs.fg = 0;
                             break;
                         case 40: case 41: case 42: case 43: case 44: case 45: case 46: case 47:
+                            this->current_attrs.flags &= ~ATTR_16_LIGHT_BG;
                             this->current_attrs.flags |= ATTR_16;
                             this->current_attrs.bg     = cmd - 10;
                             break;
@@ -1021,13 +1068,13 @@ do {                                      \
                                     auto r = csi.args[0]; SHIFT();
                                     auto g = csi.args[0]; SHIFT();
                                     auto b = csi.args[0]; SHIFT();
-                                    this->current_attrs.flags &= ~(ATTR_16 | ATTR_256);
+                                    this->current_attrs.flags &= ~(ATTR_16 | ATTR_16_LIGHT_FG | ATTR_16_LIGHT_BG | ATTR_256);
                                     this->current_attrs.flags |= ATTR_RGB;
                                     this->current_attrs.bg     = RGB_32(r, g, b);
                                     break;
                                 }
                                 case 5:
-                                    this->current_attrs.flags &= ~(ATTR_16 | ATTR_RGB);
+                                    this->current_attrs.flags &= ~(ATTR_16 | ATTR_16_LIGHT_FG | ATTR_16_LIGHT_BG | ATTR_RGB);
                                     this->current_attrs.flags |= ATTR_256;
                                     this->current_attrs.bg     = csi.args[0];
                                     SHIFT();
@@ -1220,31 +1267,6 @@ do {                                \
 
                 if (yed_get_glyph_len(*git) > 1) { goto put_utf8; }
 
-                if (isprint(c)) {
-                    if (last.c != '\e') {
-                        debug += c;
-                    }
-                } else {
-                    if (c && c != '\e') {
-                        DUMP_DEBUG();
-
-                        char pc = 0;
-                        if (c <= 0x1F) {
-                            pc = c | 0x40;
-                            goto dbg_out;
-                        }
-
-                        switch (c) {
-                            case 0x7F: pc = '?'; break;
-                        }
-
-dbg_out:;
-                        debug += '^';
-                        debug += pc;
-                        DUMP_DEBUG();
-                    }
-                }
-
                 if (dectst) {
                     switch (c) {
                         case '8':
@@ -1265,6 +1287,14 @@ dbg_out:;
                 }
 
                 if (last.c == '\e') {
+                    if (c != '[' && c != ']') {
+                        if (!isprint(c)) {
+                            DBG("ESC 0x%x", c);
+                        } else {
+                            DBG("ESC %c", c);
+                        }
+                    }
+
                     switch (c) {
                         case '[': {
                             CSI csi(p + 1);
@@ -1314,9 +1344,16 @@ dbg_out:;
                         case '(':
                             setcharset = 1;
                             break;
+                        case '7':
+                            this->save_cursor();
+                            break;
                         case '8':
-                            this->set_cursor(1, 1);
-                            this->current_attrs = ZERO_ATTR;
+                            if (this->cursor_saved()) {
+                                this->restore_cursor();
+                            } else {
+                                this->set_cursor(1, 1);
+                                this->current_attrs = ZERO_ATTR;
+                            }
                             break;
                         case 'D':
                         case 'E':
@@ -1340,9 +1377,35 @@ dbg_out:;
                             /* Flash */
                             break;
                         default:;
+                            DBG("UNHANDLED ESC 0x%x", c);
                             goto put;
                     }
                     goto next;
+                }
+
+                if (isprint(c)) {
+                    if (last.c != '\e') {
+                        debug += c;
+                    }
+                } else {
+                    if (c && c != '\e') {
+                        DUMP_DEBUG();
+
+                        char pc = 0;
+                        if (c <= 0x1F) {
+                            pc = c | 0x40;
+                            goto dbg_out;
+                        }
+
+                        switch (c) {
+                            case 0x7F: pc = '?'; break;
+                        }
+
+dbg_out:;
+                        debug += '^';
+                        debug += pc;
+                        DUMP_DEBUG();
+                    }
                 }
 
                 switch (c) {
@@ -1789,7 +1852,7 @@ static void focus(yed_event *event) {
         to_buff = event->frame->buffer;
     }
 
-    if (auto t = term_for_buffer(event->buffer)) {
+    if (auto t = term_for_buffer(to_buff)) {
         if (t->term_mode) {  to_term = 1; }
     }
 
