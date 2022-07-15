@@ -256,6 +256,10 @@ struct Screen {
 
     Screen(yed_attrs &_attrs) : attrs(_attrs) { }
 
+    ~Screen() {
+        for (auto linep : this->lines) { delete linep; }
+    }
+
     Line& operator[](std::size_t idx)             { return *(lines[idx]); }
     const Line& operator[](std::size_t idx) const { return *(lines[idx]); }
 
@@ -292,8 +296,7 @@ struct Screen {
     }
 
     void _delete_line(int which) {
-        auto linep = this->lines[which];
-        delete linep;
+        delete this->lines[which];
         this->lines.erase(this->lines.begin() + which);
     }
 
