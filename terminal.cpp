@@ -594,30 +594,40 @@ struct Term {
     static void read_thread(Term *term) {
         struct pollfd pfd;
         ssize_t       n;
-        char          buff[512];
 
         pfd.fd     = term->master_fd;
         pfd.events = POLLIN;
 
         for (;;) {
-            poll(&pfd, 1, -1);
-
-            int force_update = 0;
-            { std::lock_guard<std::mutex> lock(term->buff_lock);
-                if (term->data_buff.size() == 0) {
-                    /* The main thread has emptied the buffer, so we'll need
-                     * to force a new update for this new data. */
-                    force_update = 1;
+            if (poll(&pfd, 1, -1) <= 0) {
+                if (errno) {
+                    errno                = 0;
+                    term->process_exited = 1;
+                    return;
                 }
-
-                while ((n = read(term->master_fd, buff, sizeof(buff))) > 0) {
-                    for (size_t i = 0; i < n; i += 1) {
-                        term->data_buff.push_back(buff[i]);
-                    }
-                }
+                continue;
             }
 
-            if (force_update) { yed_force_update(); }
+            int force_update = 0;
+
+            { std::lock_guard<std::mutex> lock(term->buff_lock);
+                #define BUFF_SZ (4096)
+                auto s = term->data_buff.size();
+
+                /* If the main thread has emptied the buffer, we need
+                 * to force a new update for this new data. */
+                force_update = s == 0;
+
+                term->data_buff.resize(s + BUFF_SZ);
+                char *p = &(term->data_buff[term->data_buff.size() - BUFF_SZ]);
+
+                while ((n = read(term->master_fd, p, BUFF_SZ)) > 0) {
+                    term->data_buff.resize(((p + n) - term->data_buff.data()) + BUFF_SZ);
+                    p = &(term->data_buff[term->data_buff.size() - BUFF_SZ]);
+                }
+
+                term->data_buff.resize((p - term->data_buff.data()));
+            }
 
             if (n <= 0) {
                 if (errno == EWOULDBLOCK) {
@@ -628,6 +638,8 @@ struct Term {
                     return;
                 }
             }
+
+            if (force_update) { yed_force_update(); }
         }
     }
 
@@ -1274,6 +1286,7 @@ do {                                      \
     }
 
     void update() {
+        int                do_log = yed_var_is_truthy("terminal-debug-log");
         std::vector<char>  buff;
         static std::string incomplete_csi;
         int                dectst     = 0;
@@ -1296,7 +1309,7 @@ do {                                      \
 
 #define DUMP_DEBUG()                \
 do {                                \
-    if (debug.size()) {             \
+    if (do_log && debug.size()) {   \
         DBG("'%s'", debug.c_str()); \
         debug.clear();              \
     }                               \
@@ -1431,6 +1444,9 @@ do {                                \
                                 this->move_cursor(-1, 0);
                             }
                             break;
+                        case 'P':
+                            /* Device Control String */
+                            break;
                         case 'g':
                             /* Flash */
                             break;
@@ -1441,28 +1457,30 @@ do {                                \
                     goto next;
                 }
 
-                if (isprint(c)) {
-                    if (last.c != '\e') {
-                        debug += c;
-                    }
-                } else {
-                    if (c && c != '\e') {
-                        DUMP_DEBUG();
-
-                        char pc = 0;
-                        if (c <= 0x1F) {
-                            pc = c | 0x40;
-                            goto dbg_out;
+                if (do_log) {
+                    if (isprint(c)) {
+                        if (last.c != '\e') {
+                            debug += c;
                         }
+                    } else {
+                        if (c && c != '\e') {
+                            DUMP_DEBUG();
 
-                        switch (c) {
-                            case 0x7F: pc = '?'; break;
-                        }
+                            char pc = 0;
+                            if (c <= 0x1F) {
+                                pc = c | 0x40;
+                                goto dbg_out;
+                            }
+
+                            switch (c) {
+                                case 0x7F: pc = '?'; break;
+                            }
 
 dbg_out:;
-                        debug += '^';
-                        debug += pc;
-                        DUMP_DEBUG();
+                            debug += '^';
+                            debug += pc;
+                            DUMP_DEBUG();
+                        }
                     }
                 }
 
@@ -1504,7 +1522,7 @@ dbg_out:;
                     put:;
                         if (iscntrl(git->c)) { goto next; }
                     put_utf8:;
-                        if (yed_get_glyph_len(*git) > 1) {
+                        if (do_log && yed_get_glyph_len(*git) > 1) {
                             for (int i = 0; i < yed_get_glyph_len(*git); i += 1) {
                                 debug += git->bytes[i];
                             }
