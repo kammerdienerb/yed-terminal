@@ -1,5 +1,6 @@
 #include <memory>
 #include <vector>
+#include <deque>
 #include <list>
 #include <map>
 #include <string>
@@ -7,6 +8,7 @@
 #include <mutex>
 #include <unistd.h>
 #include <signal.h>
+#include <poll.h>
 #include <errno.h>
 #include <sys/ioctl.h>
 #include <sys/types.h>
@@ -14,7 +16,6 @@
 #include <fcntl.h>
 #include <ctype.h>
 #include <climits>
-#include <type_traits>
 
 #ifdef __APPLE__
 #include <util.h>
@@ -96,6 +97,44 @@ do {                                                               \
 #define BUFF_WRITABLE_GUARD(_buff)             \
     (_buff)->flags &= ~(BUFF_RD_ONLY);         \
     defer { (_buff)->flags |= BUFF_RD_ONLY; };
+
+
+
+
+#define DEFAULT_SHELL      "/bin/bash"
+#define DEFAULT_TERMVAR    "xterm-256color"
+#define DEFAULT_SCROLLBACK 10000
+
+const char *get_shell() {
+    const char *shell;
+
+    shell = yed_get_var("terminal-shell");
+
+    if (shell == NULL) { shell = getenv("SHELL"); }
+    if (shell == NULL) { shell = DEFAULT_SHELL;   }
+
+    return shell;
+}
+
+const char *get_termvar() {
+    const char *termvar;
+
+    termvar = yed_get_var("terminal-termvar");
+
+    if (termvar == NULL) { termvar = DEFAULT_TERMVAR; }
+
+    return termvar;
+}
+
+const int get_scrollback() {
+    int scrollback;
+
+    if (!yed_get_var_as_int("terminal-scrollback", &scrollback)) {
+        scrollback = DEFAULT_SCROLLBACK;
+    }
+
+    return scrollback;
+}
 
 
 #define MODE_RESET ('!')
@@ -237,10 +276,9 @@ struct Line : std::vector<Cell> {
 
 #define DEFAULT_WIDTH           (80)
 #define DEFAULT_HEIGHT          (24)
-#define DEFAULT_SCROLLBACK      (10000)
 
 struct Screen {
-    std::vector<Line*> lines;
+    std::deque<Line*> lines;
     int                width           = 0;
     int                height          = 0;
     int                cursor_row      = 1;
@@ -251,7 +289,7 @@ struct Screen {
     int                cursor_saved    = 0;
     int                scroll_t        = 0;
     int                scroll_b        = 0;
-    int                scrollback      = DEFAULT_SCROLLBACK;
+    int                scrollback      = get_scrollback();
     yed_attrs         &attrs;
 
     Screen(yed_attrs &_attrs) : attrs(_attrs) { }
@@ -341,7 +379,10 @@ struct Screen {
         LIMIT(this->scroll_t, 0, this->height);
         LIMIT(this->scroll_b, 0, this->height);
 
-        this->make_dirty();
+        for (int row = this->scrollback + 1; row < this->scrollback + this->height; row += 1) {
+            auto &line = *(this->lines[row - 1]);
+            line.dirty = 1;
+        }
     }
 
     void set_scroll(int top, int bottom) {
@@ -499,6 +540,8 @@ struct Screen {
     void write_to_buffer(yed_buffer *buffer) {
         BUFF_WRITABLE_GUARD(buffer);
 
+        yed_line new_line = yed_new_line_with_cap(this->width);
+
         int row = 1;
         for (auto linep : this->lines) {
             auto &line = *linep;
@@ -510,42 +553,23 @@ struct Screen {
                     ||  line[n - 1].attrs.flags != 0) { break; }
                 }
 
-                yed_line_clear_no_undo(buffer, row);
+                yed_clear_line(&new_line);
+
                 for (int i = 0; i < n; i += 1) {
                     auto g = line[i].glyph.c ? line[i].glyph : G(' ');
-                    yed_append_to_line_no_undo(buffer, row, g);
+                    yed_line_append_glyph(&new_line, g);
                 }
+
+                yed_buff_set_line_no_undo(buffer, row, &new_line);
 
                 line.dirty = 0;
             }
             row += 1;
         }
+
+        yed_free_line(&new_line);
     }
 };
-
-#define DEFAULT_SHELL   "/bin/bash"
-#define DEFAULT_TERMVAR "xterm-256color"
-
-const char *get_shell() {
-    const char *shell;
-
-    shell = yed_get_var("terminal-shell");
-
-    if (shell == NULL) { shell = getenv("SHELL"); }
-    if (shell == NULL) { shell = DEFAULT_SHELL;   }
-
-    return shell;
-}
-
-const char *get_termvar() {
-    const char *termvar;
-
-    termvar = yed_get_var("terminal-termvar");
-
-    if (termvar == NULL) { termvar = DEFAULT_TERMVAR; }
-
-    return termvar;
-}
 
 
 struct Term {
@@ -568,28 +592,43 @@ struct Term {
     int                term_mode      = 1;
 
     static void read_thread(Term *term) {
-        ssize_t n;
-        char    buff[512];
+        struct pollfd pfd;
+        ssize_t       n;
+        char          buff[512];
+
+        pfd.fd     = term->master_fd;
+        pfd.events = POLLIN;
 
         for (;;) {
+            poll(&pfd, 1, -1);
 
-            if ((n = read(term->master_fd, buff, sizeof(buff))) <= 0) {
-                errno                = 0;
-                term->process_exited = 1;
-                break;
-            }
-
+            int force_update = 0;
             { std::lock_guard<std::mutex> lock(term->buff_lock);
+                if (term->data_buff.size() == 0) {
+                    /* The main thread has emptied the buffer, so we'll need
+                     * to force a new update for this new data. */
+                    force_update = 1;
+                }
 
-                for (size_t i = 0; i < n; i += 1) {
-                    term->data_buff.push_back(buff[i]);
+                while ((n = read(term->master_fd, buff, sizeof(buff))) > 0) {
+                    for (size_t i = 0; i < n; i += 1) {
+                        term->data_buff.push_back(buff[i]);
+                    }
                 }
             }
 
-            yed_force_update();
-        }
+            if (force_update) { yed_force_update(); }
 
-        yed_force_update();
+            if (n <= 0) {
+                if (errno == EWOULDBLOCK) {
+                    errno = 0;
+                } else {
+                    errno                = 0;
+                    term->process_exited = 1;
+                    return;
+                }
+            }
+        }
     }
 
     Screen& screen() { return *this->_screen; }
@@ -659,6 +698,7 @@ struct Term {
 
             setenv("TERM", get_termvar(), 1);
 
+#if 0
             printf("Wecome to\n\n");
             printf(TERM_CYAN);
             printf(
@@ -670,11 +710,11 @@ struct Term {
             );
             printf(TERM_RESET);
             printf("\n");
-
-#if 0
+#endif
+#if 1
             printf(
 "Welcome to\n"
-TERM_BLUE
+TERM_CYAN
 "                _   _                      _             _ \n"
 " _   _  ___  __| | | |_ ___ _ __ _ __ ___ (_)_ __   __ _| |\n"
 "| | | |/ _ \\/ _` | | __/ _ \\ '__| '_ ` _ \\| | '_ \\ / _` | |\n"
@@ -687,6 +727,9 @@ TERM_BLUE
             execvp(get_shell(), args);
             exit(123);
         } else {
+            int flags = fcntl(this->master_fd, F_GETFL);
+            int err = fcntl(this->master_fd, F_SETFL, flags | O_NONBLOCK);
+
             this->shell_pid = p;
 
             this->resize(DEFAULT_WIDTH, DEFAULT_HEIGHT);
@@ -1753,6 +1796,7 @@ static void key(yed_event *event) {
 
         t->keys(len, keys);
         event->cancel = 1;
+        yed_force_update();
     }
 }
 
@@ -1880,6 +1924,12 @@ static void focus(yed_event *event) {
     }
 }
 
+static u64 p;
+static void pump(yed_event *event) {
+    LOG("PUMP %lu", p);
+    p += 1;
+}
+
 static void term_new_cmd(int n_args, char **args) {
     Term *t = state->new_term();
     YEXE("special-buffer-prepare-focus", t->buffer->name);
@@ -1918,9 +1968,11 @@ int yed_plugin_boot(yed_plugin *self) {
     }
 
     std::map<const char*, const char*> vars = {
-        { "terminal-shell",          get_shell()   },
-        { "terminal-termvar",        get_termvar() },
-        { "terminal-auto-term-mode", "ON"          }};
+        { "terminal-debug-log",      "OFF"                    },
+        { "terminal-shell",          get_shell()              },
+        { "terminal-termvar",        get_termvar()            },
+        { "terminal-auto-term-mode", "ON"                     },
+        { "terminal-scrollback",     XSTR(DEFAULT_SCROLLBACK) }};
 
     std::map<const char*, void(*)(int, char**)> cmds = {
         { "term-new",         term_new_cmd         },
@@ -1936,6 +1988,7 @@ int yed_plugin_boot(yed_plugin *self) {
                        EVENT_FRAME_POST_SET_BUFFER,                         } },
         { sig,       { EVENT_SIGNAL_RECEIVED                                } },
         { activated, { EVENT_FRAME_ACTIVATED                                } },
+        { pump,      { EVENT_POST_PUMP                                } },
         { focus,     { EVENT_FRAME_PRE_SET_BUFFER, EVENT_FRAME_PRE_ACTIVATE } }};
 
     for (auto &pair : vars) {
