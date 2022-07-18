@@ -491,12 +491,10 @@ struct Screen {
             yed_buff_insert_line_no_undo(buffer, new_row);
         }
 
-        if (this->scroll_t || this->scroll_b) {
-            for (int i = this->sctop(); i <= this->scbottom(); i += 1) {
-                auto &line = (*this)[this->scrollback + i - 1];
-                ASSERT(line.size() >= this->width, "bad line width");
-                line.dirty = 1;
-            }
+        for (int i = this->sctop(); i <= this->scbottom(); i += 1) {
+            auto &line = (*this)[this->scrollback + i - 1];
+            ASSERT(line.size() >= this->width, "bad line width");
+            line.dirty = 1;
         }
 
         ASSERT(this->lines.size() == this->scrollback + this->height, "rows mismatch");
@@ -515,12 +513,32 @@ struct Screen {
             yed_buff_insert_line_no_undo(buffer, new_row);
         }
 
-        if (this->scroll_t || this->scroll_b) {
-            for (int i = this->sctop(); i <= this->scbottom(); i += 1) {
-                auto &line = (*this)[this->scrollback + i - 1];
-                ASSERT(line.size() >= this->width, "bad line width");
-                line.dirty = 1;
-            }
+        for (int i = this->sctop(); i <= this->scbottom(); i += 1) {
+            auto &line = (*this)[this->scrollback + i - 1];
+            ASSERT(line.size() >= this->width, "bad line width");
+            line.dirty = 1;
+        }
+
+        ASSERT(this->lines.size() == this->scrollback + this->height, "rows mismatch");
+    }
+
+    void scroll_down_with_scrollback(yed_buffer *buffer) {
+        int del_row = this->scrollback + (this->scroll_b ? this->scroll_b : this->height);
+        int new_row = this->scroll_t ? this->scrollback + this->scroll_t : 1;
+
+        this->_delete_line(del_row - 1);
+        this->lines.insert(this->lines.begin() + new_row - 1, new Line(this->width, this->attrs));
+        this->make_line_dirty_abs(new_row);
+
+        { BUFF_WRITABLE_GUARD(buffer);
+            yed_buff_delete_line_no_undo(buffer, del_row);
+            yed_buff_insert_line_no_undo(buffer, new_row);
+        }
+
+        for (int i = this->sctop(); i <= this->scbottom(); i += 1) {
+            auto &line = (*this)[this->scrollback + i - 1];
+            ASSERT(line.size() >= this->width, "bad line width");
+            line.dirty = 1;
         }
 
         ASSERT(this->lines.size() == this->scrollback + this->height, "rows mismatch");
@@ -544,12 +562,10 @@ struct Screen {
             yed_buff_insert_line_no_undo(buffer, new_row);
         }
 
-        if (this->scroll_t || this->scroll_b) {
-            for (int i = this->sctop(); i <= this->scbottom(); i += 1) {
-                auto &line = (*this)[this->scrollback + i - 1];
-                ASSERT(line.size() >= this->width, "bad line width");
-                line.dirty = 1;
-            }
+        for (int i = this->sctop(); i <= this->scbottom(); i += 1) {
+            auto &line = (*this)[this->scrollback + i - 1];
+            ASSERT(line.size() >= this->width, "bad line width");
+            line.dirty = 1;
         }
 
         ASSERT(this->lines.size() == this->scrollback + this->height, "rows mismatch");
@@ -845,10 +861,11 @@ TERM_CYAN
         this->delete_cell(this->row(), this->col());
     }
 
-    void scroll_up()                   { this->screen().scroll_up(this->buffer);        }
-    void scroll_down()                 { this->screen().scroll_down(this->buffer);      }
-    void insert_line(int row)          { this->screen().insert_line(row, this->buffer); }
-    void delete_line(int row)          { this->screen().delete_line(row, this->buffer); }
+    void scroll_up()                   { this->screen().scroll_up(this->buffer);                   }
+    void scroll_down()                 { this->screen().scroll_down(this->buffer);                 }
+    void scroll_down_with_scrollback() { this->screen().scroll_down_with_scrollback(this->buffer); }
+    void insert_line(int row)          { this->screen().insert_line(row, this->buffer);            }
+    void delete_line(int row)          { this->screen().delete_line(row, this->buffer);            }
 
     void set_cursor_in_frame(yed_frame *frame) {
         yed_set_cursor_within_frame(frame, this->scrollback_row() + this->height(), this->col());
@@ -1039,6 +1056,7 @@ do {                                      \
                         break;
                     case 1049:
                         this->_screen = &this->alt_screen;
+                        this->set_cursor(1, 1);
                         this->clear_page();
                         this->screen().make_dirty();
                         DBG("alt_screen ON");
@@ -1154,6 +1172,7 @@ do {                                      \
                                     this->current_attrs.flags &= ~(ATTR_16 | ATTR_16_LIGHT_FG | ATTR_16_LIGHT_BG | ATTR_256);
                                     this->current_attrs.flags |= ATTR_RGB;
                                     this->current_attrs.fg     = RGB_32(r, g, b);
+                                    if (this->current_attrs.fg == 0) { this->current_attrs.fg = RGB_32(1, 1, 1); }
                                     break;
                                 }
                                 case 5:
@@ -1184,6 +1203,7 @@ do {                                      \
                                     this->current_attrs.flags &= ~(ATTR_16 | ATTR_16_LIGHT_FG | ATTR_16_LIGHT_BG | ATTR_256);
                                     this->current_attrs.flags |= ATTR_RGB;
                                     this->current_attrs.bg     = RGB_32(r, g, b);
+                                    if (this->current_attrs.bg == 0) { this->current_attrs.bg = RGB_32(1, 1, 1); }
                                     break;
                                 }
                                 case 5:
@@ -1514,7 +1534,7 @@ do {                                \
                             break;
                         case 'M':
                             if (this->row() == this->sctop()) {
-                                this->scroll_down();
+                                this->scroll_down_with_scrollback();
                             } else {
                                 this->move_cursor(-1, 0);
                             }
@@ -1635,7 +1655,21 @@ out:;
 
     void keys(int len, int *keys) {
         for (int i = 0; i < len; i += 1) {
-            switch (keys[i]) {
+            int key = keys[i];
+            if (IS_MOUSE(key)) {
+                switch (MOUSE_BUTTON(key)) {
+                    case MOUSE_WHEEL_UP:
+                        key = ARROW_UP;
+                        break;
+                    case MOUSE_WHEEL_DOWN:
+                        key = ARROW_DOWN;
+                        break;
+                    default:
+                        continue;
+                }
+            }
+
+            switch (key) {
                 case ARROW_UP:
                 case ARROW_DOWN:
                 case ARROW_RIGHT:
@@ -1647,7 +1681,7 @@ out:;
                 default:
                     break;
             }
-            switch (keys[i]) {
+            switch (key) {
                 case ARROW_UP:
                     write(this->master_fd, "A", 1);
                     break;
@@ -1718,7 +1752,7 @@ out:;
                     write(this->master_fd, "\e[29~", 5);
                     break;
                 default:
-                    char c = keys[i];
+                    char c = key;
                     write(this->master_fd, &c, 1);
             }
         }
@@ -1838,24 +1872,22 @@ static void toggle_term_mode(Term *t) {
 }
 
 static void update(yed_event *event) {
-    static std::vector<yed_direct_draw_t*>   dds;
-    yed_frame                              **fit;
-    yed_frame                               *f;
+    static yed_direct_draw_t  *dd = NULL;
+    yed_frame                **fit;
+    yed_frame                 *f;
 
-    for (auto dd : dds) { yed_kill_direct_draw(dd); }
-    dds.clear();
+    if (dd != NULL) { yed_kill_direct_draw(dd); dd = NULL; }
 
-    array_traverse(ys->frames, fit) {
-        f = *fit;
+    f = ys->active_frame;
+
+    if (f != NULL) {
         if (auto t = term_for_buffer(f->buffer)) {
             if (!t->term_mode) {
                 const char *s = " term-mode: OFF ";
                 int row       = f->top + 1;
                 int col       = f->left + f->width - 1 - strlen(s);
                 auto attrs    = yed_parse_attrs("&bad inverse");
-                auto dd       = yed_direct_draw(row, col, attrs, s);
-
-                dds.push_back(dd);
+                dd            = yed_direct_draw(row, col, attrs, s);
             }
         }
     }
@@ -1885,14 +1917,24 @@ static void key(yed_event *event) {
     int keys[MAX_SEQ_LEN];
 
     if (ys->interactive_command
-    ||  !ys->active_frame
-    ||  IS_MOUSE(event->key)) {
-
+    ||  !ys->active_frame) {
         return;
+    }
+
+    if (IS_MOUSE(event->key)) {
+        auto btn = MOUSE_BUTTON(event->key);
+        if (btn != MOUSE_WHEEL_UP && btn != MOUSE_WHEEL_DOWN) {
+            return;
+        }
     }
 
     auto t = term_for_buffer(ys->active_frame->buffer);
     if (t == NULL || !t->term_mode) { return; }
+
+    if (yed_var_is_truthy("terminal-debug-log")) {
+        char *s = yed_keys_to_string(1, &event->key);
+        DBG("KEY %s", s);
+    }
 
     if (yed_get_real_keys(event->key, &len, keys)) {
         if (event->key == CTRL_T) {
