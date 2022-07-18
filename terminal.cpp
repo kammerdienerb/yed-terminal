@@ -165,7 +165,7 @@ do {                      \
     this->len += 1;       \
 } while (0)
 
-#define IS_DELIM(_c) ((_c) == ';' || (_c) == ':' || (_c) == '?' || (_c) == ' ' || (_c) == '>' || (c) == '!')
+#define IS_DELIM(_c) ((_c) == ';' || (_c) == ':' || (_c) == '?' || (_c) == ' ' || (_c) == '>' || (c) == '!' || (c) == '%')
 #define IS_FINAL(_c) ((_c) >= 0x40 && (_c) <= 0x7E)
 
         while (IS_DELIM(c)) {
@@ -246,7 +246,48 @@ do {                      \
             NEXT();
         }
 
-        this->complete = 1;
+        if (c) {
+            this->complete = 1;
+        }
+out:;
+
+#undef NEXT
+    }
+};
+
+struct DCS {
+    int         len      = 0;
+    int         complete = 0;
+    std::string str;
+
+    DCS(const char *str) {
+        char c;
+
+        c = *str;
+
+        if (!c) { return; }
+
+        this->len = 1;
+
+#define NEXT()            \
+do {                      \
+    str += 1;             \
+    c = *str;             \
+    if (!c) { goto out; } \
+    this->len += 1;       \
+} while (0)
+
+        while (c) {
+            if (c == '\e') {
+                NEXT();
+                if (c == '\\') {
+                    this->complete = 1;
+                    break;
+                }
+            }
+            this->str += c;
+            NEXT();
+        }
 out:;
 
 #undef NEXT
@@ -278,7 +319,7 @@ struct Line : std::vector<Cell> {
 #define DEFAULT_HEIGHT          (24)
 
 struct Screen {
-    std::deque<Line*> lines;
+    std::deque<Line*>  lines;
     int                width           = 0;
     int                height          = 0;
     int                cursor_row      = 1;
@@ -419,6 +460,7 @@ struct Screen {
         auto &line = (*this)[this->scrollback + row - 1];
         line.erase(line.begin() + col - 1);
         line.push_back({ G(0), this->attrs });
+        line.dirty = 1;
     }
 
     void clear_row_abs(int row) {
@@ -997,6 +1039,7 @@ do {                                      \
                         break;
                     case 1049:
                         this->_screen = &this->alt_screen;
+                        this->clear_page();
                         this->screen().make_dirty();
                         DBG("alt_screen ON");
                         break;
@@ -1289,6 +1332,8 @@ do {                                      \
         int                do_log = yed_var_is_truthy("terminal-debug-log");
         std::vector<char>  buff;
         static std::string incomplete_csi;
+        static int         incomplete_esc;
+        static int         wrap       = 0;
         int                dectst     = 0;
         int                setcharset = 0;
 
@@ -1298,14 +1343,22 @@ do {                                      \
             this->data_buff.clear();
         }
 
-        buff.push_back(0);
-
-        if (incomplete_csi.size()) {
+        if (incomplete_esc) {
+            buff.insert(buff.begin(), '\e');
+            incomplete_esc = 0;
+        } else if (incomplete_csi.size()) {
             for (auto it = incomplete_csi.rbegin(); it != incomplete_csi.rend(); it++) {
                 buff.insert(buff.begin(), *it);
             }
             incomplete_csi.clear();
         }
+
+        if (buff.size() && buff.back() == '\e') {
+            incomplete_esc = 1;
+            buff.pop_back();
+        }
+
+        buff.push_back(0);
 
 #define DUMP_DEBUG()                \
 do {                                \
@@ -1331,7 +1384,7 @@ do {                                \
                     continue;
                 }
 
-                ASSERT(incomplete_csi.size() == 0, "incomplete in middle of stream");
+/*                 ASSERT(incomplete_csi.size() == 0, "incomplete in middle of stream"); */
 
                 char *p = &git->c;
                 char  c = *p;
@@ -1367,6 +1420,9 @@ do {                                \
                     }
 
                     switch (c) {
+                        case '\\':
+                            /* String terminator. */
+                            break;
                         case '[': {
                             CSI csi(p + 1);
 
@@ -1398,6 +1454,25 @@ do {                                \
                                 incomplete_csi.clear();
                                 incomplete_csi += "\e]";
                                 for (int i = 0; i < osc.len; i += 1) {
+                                    incomplete_csi += *(p + 1 + i);
+                                }
+                            }
+                            break;
+                        }
+                        case 'P': {
+                            /* Device Control String */
+                            DCS dcs(p + 1);
+                            csi_countdown = dcs.len;
+
+                            DUMP_DEBUG();
+
+                            if (dcs.complete) {
+                                DBG("DCS: '\\eP%.*s'", dcs.len, p + 1);
+                            } else {
+                                DBG("INCOMPLETE DCS: '\\eP%.*s'", dcs.len, p + 1);
+                                incomplete_csi.clear();
+                                incomplete_csi += "\eP";
+                                for (int i = 0; i < dcs.len; i += 1) {
                                     incomplete_csi += *(p + 1 + i);
                                 }
                             }
@@ -1443,9 +1518,6 @@ do {                                \
                             } else {
                                 this->move_cursor(-1, 0);
                             }
-                            break;
-                        case 'P':
-                            /* Device Control String */
                             break;
                         case 'g':
                             /* Flash */
@@ -1527,8 +1599,25 @@ dbg_out:;
                                 debug += git->bytes[i];
                             }
                         }
+
+                        if (wrap) {
+                            if (this->col() == this->width()) {
+                                if (this->row() == this->scbottom()) {
+                                    this->scroll_up();
+                                } else {
+                                    this->move_cursor(1, 0);
+                                }
+                                this->set_cursor(this->row(), 1);
+                            }
+                            wrap = 0;
+                        }
+
                         this->set_current_cell(*git);
-                        this->move_cursor(0, yed_get_glyph_width(*git));
+                        if (this->col() == this->width()) {
+                            wrap = 1;
+                        } else {
+                            this->move_cursor(0, yed_get_glyph_width(*git));
+                        }
                         break;
                 }
 next:;
@@ -1942,12 +2031,6 @@ static void focus(yed_event *event) {
     }
 }
 
-static u64 p;
-static void pump(yed_event *event) {
-    LOG("PUMP %lu", p);
-    p += 1;
-}
-
 static void term_new_cmd(int n_args, char **args) {
     Term *t = state->new_term();
     YEXE("special-buffer-prepare-focus", t->buffer->name);
@@ -2006,7 +2089,6 @@ int yed_plugin_boot(yed_plugin *self) {
                        EVENT_FRAME_POST_SET_BUFFER,                         } },
         { sig,       { EVENT_SIGNAL_RECEIVED                                } },
         { activated, { EVENT_FRAME_ACTIVATED                                } },
-        { pump,      { EVENT_POST_PUMP                                } },
         { focus,     { EVENT_FRAME_PRE_SET_BUFFER, EVENT_FRAME_PRE_ACTIVATE } }};
 
     for (auto &pair : vars) {
