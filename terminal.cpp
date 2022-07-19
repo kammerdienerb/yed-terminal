@@ -101,9 +101,9 @@ do {                                                               \
 
 
 
-#define DEFAULT_SHELL      "/bin/bash"
-#define DEFAULT_TERMVAR    "xterm-256color"
-#define DEFAULT_SCROLLBACK 10000
+#define DEFAULT_SHELL            "/bin/bash"
+#define DEFAULT_TERMVAR          "xterm-256color"
+#define DEFAULT_SCROLLBACK       10000
 
 const char *get_shell() {
     const char *shell;
@@ -126,7 +126,7 @@ const char *get_termvar() {
     return termvar;
 }
 
-const int get_scrollback() {
+int get_scrollback() {
     int scrollback;
 
     if (!yed_get_var_as_int("terminal-scrollback", &scrollback)) {
@@ -135,7 +135,6 @@ const int get_scrollback() {
 
     return scrollback;
 }
-
 
 #define MODE_RESET ('!')
 #define MODE_PRIV  ('?')
@@ -669,8 +668,8 @@ struct Term {
             int force_update = 0;
 
             { std::lock_guard<std::mutex> lock(term->buff_lock);
-                #define BUFF_SZ (4096)
-                auto s = term->data_buff.size();
+                #define BUFF_SZ (512)
+                auto s  = term->data_buff.size();
 
                 /* If the main thread has emptied the buffer, we need
                  * to force a new update for this new data. */
@@ -2075,6 +2074,33 @@ static void focus(yed_event *event) {
 
 static void term_new_cmd(int n_args, char **args) {
     Term *t = state->new_term();
+    yed_cprint("new terminal buffer %s", t->buffer->name);
+}
+
+static void term_open_cmd(int n_args, char **args) {
+    if (n_args > 1) {
+        yed_cerr("expected 0 or 1 arguments, but got %d", n_args);
+        return;
+    }
+
+    Term *t = NULL;
+    if (n_args) {
+        char buff[32];
+        snprintf(buff, sizeof(buff), "*term%s", args[0]);
+        if (yed_buffer *buffer = yed_get_buffer(buff)) {
+            t = term_for_buffer(buffer);
+            if (t == NULL) {
+                yed_cerr("*term%s is not a terminal buffer", args[0]);
+                return;
+            }
+        } else {
+            yed_cerr("no buffer named '*term%s'", args[0]);
+            return;
+        }
+    } else {
+        t = state->new_term();
+    }
+
     YEXE("special-buffer-prepare-focus", t->buffer->name);
     YEXE("buffer", t->buffer->name);
 }
@@ -2111,14 +2137,15 @@ int yed_plugin_boot(yed_plugin *self) {
     }
 
     std::map<const char*, const char*> vars = {
-        { "terminal-debug-log",      "OFF"                    },
-        { "terminal-shell",          get_shell()              },
-        { "terminal-termvar",        get_termvar()            },
-        { "terminal-auto-term-mode", "ON"                     },
-        { "terminal-scrollback",     XSTR(DEFAULT_SCROLLBACK) }};
+        { "terminal-debug-log",        "OFF"                    },
+        { "terminal-shell",            get_shell()              },
+        { "terminal-termvar",          get_termvar()            },
+        { "terminal-auto-term-mode",   "ON"                     },
+        { "terminal-scrollback",       XSTR(DEFAULT_SCROLLBACK) }};
 
     std::map<const char*, void(*)(int, char**)> cmds = {
         { "term-new",         term_new_cmd         },
+        { "term-open",        term_open_cmd        },
         { "toggle-term-mode", toggle_term_mode_cmd }};
 
     std::map<void(*)(yed_event*), std::vector<yed_event_kind_t> > event_handlers = {
