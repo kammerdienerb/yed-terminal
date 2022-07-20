@@ -1783,15 +1783,18 @@ out:;
             if (col > this->screen()[row - 1].size()) { break; }
             yed_attrs attrs = this->screen()[row - 1][col - 1].attrs;
 
-            if (attrs.flags & ATTR_16) {
+            if (attrs.flags   & ATTR_16
+            &&  !(attrs.flags & ATTR_256)
+            &&  !(attrs.flags & ATTR_RGB)) {
+
                 attrs.flags &= ~(ATTR_16 | ATTR_256 | ATTR_RGB);
 
-                if (attrs.fg) {
+                if (attrs.fg >= 30 && attrs.fg <= 37) {
                     int fg = attrs.fg - 30 + (!!(attrs.flags & ATTR_16_LIGHT_FG)) * 8;
                     attrs.flags |= colors[fg].flags & (ATTR_16 | ATTR_256 | ATTR_RGB);
                     attrs.fg = colors[fg].fg;
                 }
-                if (attrs.bg) {
+                if (attrs.bg >= 30 && attrs.bg <= 37) {
                     int bg = attrs.bg - 30 + (!!(attrs.flags & ATTR_16_LIGHT_BG)) * 8;
                     attrs.flags |= colors[bg].flags & (ATTR_16 | ATTR_256 | ATTR_RGB);
                     attrs.bg = colors[bg].fg;
