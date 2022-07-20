@@ -1733,6 +1733,12 @@ out:;
         }
     }
 
+    void paste(const char *bytes) {
+        write(this->master_fd, "\e[200~", 6);
+        write(this->master_fd, bytes, strlen(bytes));
+        write(this->master_fd, "\e[201~", 6);
+    }
+
     void fit_to_frames() {
         int         in_frame;
         int         width;
@@ -1792,7 +1798,6 @@ out:;
                 }
             }
 
-            *ait = colors[CDEFAULT];
             yed_combine_attrs(ait, &attrs);
 
             col += 1;
@@ -1937,6 +1942,35 @@ static void key(yed_event *event) {
         t->keys(len, keys);
         event->cancel = 1;
         yed_force_update();
+    }
+}
+
+static void ins(yed_event *event) {
+    const char *text      = NULL;
+    int         free_text = 0;
+
+    if (ys->active_frame == NULL || ys->active_frame->buffer == NULL) { return; }
+
+    if (auto t = term_for_buffer(ys->active_frame->buffer)) {
+        if (strcmp(event->cmd_name, "simple-insert-string") == 0) {
+            text = event->args[0];
+        } else if (strcmp(event->cmd_name, "paste-yank-buffer") == 0) {
+            text      = yed_get_buffer_text(yed_get_yank_buffer());
+            free_text = 1;
+        } else {
+            return;
+        }
+
+        if (!t->term_mode) { toggle_term_mode(t); }
+
+        if (text == NULL) { goto out; }
+
+        t->paste(text);
+        if (free_text) { free((char*)text); }
+
+        yed_force_update();
+out:;
+        event->cancel = 1;
     }
 }
 
@@ -2178,6 +2212,7 @@ int yed_plugin_boot(yed_plugin *self) {
     std::map<void(*)(yed_event*), std::vector<yed_event_kind_t> > event_handlers = {
         { update,    { EVENT_PRE_DRAW_EVERYTHING                            } },
         { key,       { EVENT_KEY_PRESSED                                    } },
+        { ins,       { EVENT_CMD_PRE_RUN                                    } },
         { line,      { EVENT_LINE_PRE_DRAW                                  } },
         { row,       { EVENT_ROW_PRE_CLEAR                                  } },
         { fit,       { EVENT_FRAME_POST_RESIZE, EVENT_TERMINAL_RESIZED,
