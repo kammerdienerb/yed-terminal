@@ -136,6 +136,10 @@ int get_scrollback() {
     return scrollback;
 }
 
+#define N_COLORS (17)
+static yed_attrs colors[N_COLORS];
+#define CDEFAULT (N_COLORS - 1)
+
 #define MODE_RESET ('!')
 #define MODE_PRIV  ('?')
 #define MODE_XTERM ('>')
@@ -483,8 +487,6 @@ struct Screen {
             this->lines.insert(this->lines.begin() + new_row - 1, new Line(this->width, this->attrs));
         }
 
-        this->make_line_dirty_abs(new_row);
-
         { BUFF_WRITABLE_GUARD(buffer);
             yed_buff_delete_line_no_undo(buffer, del_row);
             yed_buff_insert_line_no_undo(buffer, new_row);
@@ -501,33 +503,10 @@ struct Screen {
 
     void scroll_down(yed_buffer *buffer) {
         int del_row = this->scrollback + this->scbottom();
-        int new_row = this->scroll_t ? this->scrollback + this->scroll_t : 1;
+        int new_row = this->scrollback + (this->scroll_t ? this->scroll_t : 1);
 
         this->_delete_line(del_row - 1);
         this->lines.insert(this->lines.begin() + new_row - 1, new Line(this->width, this->attrs));
-        this->make_line_dirty_abs(new_row);
-
-        { BUFF_WRITABLE_GUARD(buffer);
-            yed_buff_delete_line_no_undo(buffer, del_row);
-            yed_buff_insert_line_no_undo(buffer, new_row);
-        }
-
-        for (int i = this->sctop(); i <= this->scbottom(); i += 1) {
-            auto &line = (*this)[this->scrollback + i - 1];
-            ASSERT(line.size() >= this->width, "bad line width");
-            line.dirty = 1;
-        }
-
-        ASSERT(this->lines.size() == this->scrollback + this->height, "rows mismatch");
-    }
-
-    void scroll_down_with_scrollback(yed_buffer *buffer) {
-        int del_row = this->scrollback + (this->scroll_b ? this->scroll_b : this->height);
-        int new_row = this->scroll_t ? this->scrollback + this->scroll_t : 1;
-
-        this->_delete_line(del_row - 1);
-        this->lines.insert(this->lines.begin() + new_row - 1, new Line(this->width, this->attrs));
-        this->make_line_dirty_abs(new_row);
 
         { BUFF_WRITABLE_GUARD(buffer);
             yed_buff_delete_line_no_undo(buffer, del_row);
@@ -554,8 +533,6 @@ struct Screen {
             this->lines.insert(this->lines.begin() + new_row - 1, new Line(this->width, this->attrs));
         }
 
-        this->make_line_dirty_abs(new_row);
-
         { BUFF_WRITABLE_GUARD(buffer);
             yed_buff_delete_line_no_undo(buffer, del_row);
             yed_buff_insert_line_no_undo(buffer, new_row);
@@ -576,7 +553,6 @@ struct Screen {
 
         this->_delete_line(del_row - 1);
         this->lines.insert(this->lines.begin() + new_row - 1, new Line(this->width, this->attrs));
-        this->make_line_dirty_abs(new_row);
 
         { BUFF_WRITABLE_GUARD(buffer);
             yed_buff_delete_line_no_undo(buffer, del_row);
@@ -860,11 +836,10 @@ TERM_CYAN
         this->delete_cell(this->row(), this->col());
     }
 
-    void scroll_up()                   { this->screen().scroll_up(this->buffer);                   }
-    void scroll_down()                 { this->screen().scroll_down(this->buffer);                 }
-    void scroll_down_with_scrollback() { this->screen().scroll_down_with_scrollback(this->buffer); }
-    void insert_line(int row)          { this->screen().insert_line(row, this->buffer);            }
-    void delete_line(int row)          { this->screen().delete_line(row, this->buffer);            }
+    void scroll_up()          { this->screen().scroll_up(this->buffer);        }
+    void scroll_down()        { this->screen().scroll_down(this->buffer);      }
+    void insert_line(int row) { this->screen().insert_line(row, this->buffer); }
+    void delete_line(int row) { this->screen().delete_line(row, this->buffer); }
 
     void set_cursor_in_frame(yed_frame *frame) {
         yed_set_cursor_within_frame(frame, this->scrollback_row() + this->height(), this->col());
@@ -1107,50 +1082,48 @@ do {                                      \
                             break;
                         case 2:
                             /* Dim mode ignored. */
-                            goto unhandled;
                             break;
                         case 3:
                             /* Italic mode ignored. */
-                            goto unhandled;
                             break;
                         case 4:
                             this->current_attrs.flags |= ATTR_UNDERLINE;
                             break;
                         case 5:
                             /* Blinking mode ignored. */
-                            goto unhandled;
+                            break;
+                        case 6:
+                            /* Rapid blinking mode ignored. */
                             break;
                         case 7:
                             this->current_attrs.flags |= ATTR_INVERSE;
                             break;
                         case 8:
                             /* Hidden mode ignored. */
-                            goto unhandled;
                             break;
                         case 9:
                             /* Strikethrough mode ignored. */
-                            goto unhandled;
                             break;
                         case 22:
                             this->current_attrs.flags &= ~ATTR_BOLD;
                             break;
                         case 23:
                             /* Italic mode ignored. */
-                            goto unhandled;
                             break;
                         case 24:
                             this->current_attrs.flags &= ~ATTR_UNDERLINE;
                             break;
                         case 25:
                             /* Blinking mode ignored. */
-                            goto unhandled;
+                            break;
+                        case 26:
+                            /* Rapid blinking mode ignored. */
                             break;
                         case 27:
                             this->current_attrs.flags &= ~ATTR_INVERSE;
                             break;
                         case 28:
                             /* Hidden mode ignored. */
-                            goto unhandled;
                             break;
                         case 29:
                             /* Strikethrough mode ignored. */
@@ -1389,14 +1362,15 @@ do {                                \
 
         std::string debug;
 
+        char        *s             = buff.data();
+        size_t       len           = buff.size() - 1;
+        yed_glyph   *git           = NULL;
+        yed_glyph    last          = G(0);
+        int          csi_countdown = 0;
+        char        *p             = NULL;
+        char         c             = 0;
+
         { BUFF_WRITABLE_GUARD(this->buffer);
-
-            char        *s             = buff.data();
-            size_t       len           = buff.size() - 1;
-            yed_glyph   *git           = NULL;
-            yed_glyph    last          = G(0);
-            int          csi_countdown = 0;
-
             yed_glyph_traverse_n(s, len, git) {
                 if (csi_countdown) {
                     csi_countdown -= 1;
@@ -1405,8 +1379,8 @@ do {                                \
 
 /*                 ASSERT(incomplete_csi.size() == 0, "incomplete in middle of stream"); */
 
-                char *p = &git->c;
-                char  c = *p;
+                p = &git->c;
+                c = *p;
 
                 if (yed_get_glyph_len(*git) > 1) { goto put_utf8; }
 
@@ -1476,6 +1450,7 @@ do {                                \
                                     incomplete_csi += *(p + 1 + i);
                                 }
                             }
+
                             break;
                         }
                         case 'P': {
@@ -1495,6 +1470,7 @@ do {                                \
                                     incomplete_csi += *(p + 1 + i);
                                 }
                             }
+
                             break;
                         }
                         case '#':
@@ -1533,7 +1509,7 @@ do {                                \
                             break;
                         case 'M':
                             if (this->row() == this->sctop()) {
-                                this->scroll_down_with_scrollback();
+                                this->scroll_down();
                             } else {
                                 this->move_cursor(-1, 0);
                             }
@@ -1799,9 +1775,25 @@ out:;
         col = 1;
         array_traverse(*line_attrs, ait) {
             if (col > this->screen()[row - 1].size()) { break; }
-            yed_attrs &attrs = this->screen()[row - 1][col - 1].attrs;
+            yed_attrs attrs = this->screen()[row - 1][col - 1].attrs;
 
-            *ait = attrs;
+            if (attrs.flags & ATTR_16) {
+                attrs.flags &= ~(ATTR_16 | ATTR_256 | ATTR_RGB);
+
+                if (attrs.fg) {
+                    int fg = attrs.fg - 30 + (!!(attrs.flags & ATTR_16_LIGHT_FG)) * 8;
+                    attrs.flags |= colors[fg].flags & (ATTR_16 | ATTR_256 | ATTR_RGB);
+                    attrs.fg = colors[fg].fg;
+                }
+                if (attrs.bg) {
+                    int bg = attrs.bg - 30 + (!!(attrs.flags & ATTR_16_LIGHT_BG)) * 8;
+                    attrs.flags |= colors[bg].flags & (ATTR_16 | ATTR_256 | ATTR_RGB);
+                    attrs.bg = colors[bg].fg;
+                }
+            }
+
+            *ait = colors[CDEFAULT];
+            yed_combine_attrs(ait, &attrs);
 
             col += 1;
         }
@@ -1870,12 +1862,12 @@ static void toggle_term_mode(Term *t) {
     t->toggle_term_mode();
 }
 
+static yed_direct_draw_t *term_mode_dd = NULL;
 static void update(yed_event *event) {
-    static yed_direct_draw_t  *dd = NULL;
-    yed_frame                **fit;
-    yed_frame                 *f;
+    yed_frame **fit;
+    yed_frame  *f;
 
-    if (dd != NULL) { yed_kill_direct_draw(dd); dd = NULL; }
+    if (term_mode_dd != NULL) { yed_kill_direct_draw(term_mode_dd); term_mode_dd = NULL; }
 
     f = ys->active_frame;
 
@@ -1886,7 +1878,7 @@ static void update(yed_event *event) {
                 int row       = f->top + 1;
                 int col       = f->left + f->width - 1 - strlen(s);
                 auto attrs    = yed_parse_attrs("&bad inverse");
-                dd            = yed_direct_draw(row, col, attrs, s);
+                term_mode_dd  = yed_direct_draw(row, col, attrs, s);
             }
         }
     }
@@ -1975,7 +1967,7 @@ static void row(yed_event *event) {
     if (buff == NULL) { return; }
 
     if (auto t = term_for_buffer(buff)) {
-        event->row_base_attr = ZERO_ATTR;
+        event->row_base_attr = colors[CDEFAULT];
     }
 }
 
@@ -2072,6 +2064,48 @@ static void focus(yed_event *event) {
     }
 }
 
+static void parse_color(int which, const char *str) {
+    ASSERT(which >= 0 && which <= N_COLORS, "invalid color index");
+    colors[which] = str == NULL ? ZERO_ATTR : yed_parse_attrs(str);
+}
+
+static void var(yed_event *event) {
+    const char *start     = "terminal-color";
+    int         start_len = strlen("terminal-color");
+    int         which     = -1;
+
+    if (event->var_name == NULL || event->var_val == NULL) { return; }
+    if (strncmp(event->var_name, start, start_len) != 0)   { return; }
+
+    which = strcmp(event->var_name, "terminal-color-default") == 0
+                ? CDEFAULT
+                : s_to_i(event->var_name + start_len);
+
+    if (which < 0 || which > 15) { return; }
+
+    parse_color(which, event->var_val);
+}
+
+static void style(yed_event *event) {
+    parse_color(0,        yed_get_var("terminal-color0"));
+    parse_color(1,        yed_get_var("terminal-color1"));
+    parse_color(2,        yed_get_var("terminal-color2"));
+    parse_color(3,        yed_get_var("terminal-color3"));
+    parse_color(4,        yed_get_var("terminal-color4"));
+    parse_color(5,        yed_get_var("terminal-color5"));
+    parse_color(6,        yed_get_var("terminal-color6"));
+    parse_color(7,        yed_get_var("terminal-color7"));
+    parse_color(8,        yed_get_var("terminal-color8"));
+    parse_color(9,        yed_get_var("terminal-color9"));
+    parse_color(10,       yed_get_var("terminal-color10"));
+    parse_color(11,       yed_get_var("terminal-color11"));
+    parse_color(12,       yed_get_var("terminal-color12"));
+    parse_color(13,       yed_get_var("terminal-color13"));
+    parse_color(14,       yed_get_var("terminal-color14"));
+    parse_color(15,       yed_get_var("terminal-color15"));
+    parse_color(CDEFAULT, yed_get_var("terminal-color-default"));
+}
+
 static void term_new_cmd(int n_args, char **args) {
     Term *t = state->new_term();
     yed_cprint("new terminal buffer %s", t->buffer->name);
@@ -2119,7 +2153,12 @@ static void toggle_term_mode_cmd(int n_args, char **args) {
     }
 }
 
-static void unload(yed_plugin *self) { }
+static void unload(yed_plugin *self) {
+    if (term_mode_dd != NULL) {
+        yed_kill_direct_draw(term_mode_dd);
+        term_mode_dd = NULL;
+    }
+}
 
 extern "C"
 int yed_plugin_boot(yed_plugin *self) {
@@ -2136,18 +2175,6 @@ int yed_plugin_boot(yed_plugin *self) {
         yed_set_var(STATE_ADDR_VAR_NAME, addr_buff);
     }
 
-    std::map<const char*, const char*> vars = {
-        { "terminal-debug-log",        "OFF"                    },
-        { "terminal-shell",            get_shell()              },
-        { "terminal-termvar",          get_termvar()            },
-        { "terminal-auto-term-mode",   "ON"                     },
-        { "terminal-scrollback",       XSTR(DEFAULT_SCROLLBACK) }};
-
-    std::map<const char*, void(*)(int, char**)> cmds = {
-        { "term-new",         term_new_cmd         },
-        { "term-open",        term_open_cmd        },
-        { "toggle-term-mode", toggle_term_mode_cmd }};
-
     std::map<void(*)(yed_event*), std::vector<yed_event_kind_t> > event_handlers = {
         { update,    { EVENT_PRE_DRAW_EVERYTHING                            } },
         { key,       { EVENT_KEY_PRESSED                                    } },
@@ -2158,15 +2185,37 @@ int yed_plugin_boot(yed_plugin *self) {
                        EVENT_FRAME_POST_SET_BUFFER,                         } },
         { sig,       { EVENT_SIGNAL_RECEIVED                                } },
         { activated, { EVENT_FRAME_ACTIVATED                                } },
-        { focus,     { EVENT_FRAME_PRE_SET_BUFFER, EVENT_FRAME_PRE_ACTIVATE } }};
+        { focus,     { EVENT_FRAME_PRE_SET_BUFFER, EVENT_FRAME_PRE_ACTIVATE } },
+        { var,       { EVENT_VAR_POST_SET                                   } },
+        { style,     { EVENT_STYLE_CHANGE                                   } }};
 
-    for (auto &pair : vars) {
-        if (!yed_get_var(pair.first)) { yed_set_var(pair.first, pair.second); }
-    }
+    std::map<const char*, const char*> vars = {
+        { "terminal-debug-log",        "OFF"         },
+        { "terminal-shell",            get_shell()   },
+        { "terminal-termvar",          get_termvar() },
+        { "terminal-auto-term-mode",   "ON"          },
+        { "terminal-color0",           "&black"      },
+        { "terminal-color1",           "&red"        },
+        { "terminal-color2",           "&green"      },
+        { "terminal-color3",           "&yellow"     },
+        { "terminal-color4",           "&blue"       },
+        { "terminal-color5",           "&magenta"    },
+        { "terminal-color6",           "&cyan"       },
+        { "terminal-color7",           "&grey"       },
+        { "terminal-color8",           "&grey"       },
+        { "terminal-color9",           "&red"        },
+        { "terminal-color10",          "&green"      },
+        { "terminal-color11",          "&yellow"     },
+        { "terminal-color12",          "&blue"       },
+        { "terminal-color13",          "&magenta"    },
+        { "terminal-color14",          "&cyan"       },
+        { "terminal-color15",          "&white"      },
+        { "terminal-color-default",    "&active"     }};
 
-    for (auto &pair : cmds) {
-        yed_plugin_set_command(self, pair.first, pair.second);
-    }
+    std::map<const char*, void(*)(int, char**)> cmds = {
+        { "term-new",         term_new_cmd         },
+        { "term-open",        term_open_cmd        },
+        { "toggle-term-mode", toggle_term_mode_cmd }};
 
     for (auto &pair : event_handlers) {
         for (auto evt : pair.second) {
@@ -2175,6 +2224,14 @@ int yed_plugin_boot(yed_plugin *self) {
             h.fn   = pair.first;
             yed_plugin_add_event_handler(self, h);
         }
+    }
+
+    for (auto &pair : vars) {
+        if (!yed_get_var(pair.first)) { yed_set_var(pair.first, pair.second); }
+    }
+
+    for (auto &pair : cmds) {
+        yed_plugin_set_command(self, pair.first, pair.second);
     }
 
     yed_plugin_set_unload_fn(self, unload);
