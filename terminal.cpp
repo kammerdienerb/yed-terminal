@@ -621,6 +621,7 @@ struct Term {
     Screen             alt_screen;
     Screen            *_screen        = NULL;
     int                app_keys       = 0;
+    int                auto_wrap      = 1;
     std::string        title;
     int                term_mode      = 1;
 
@@ -1022,6 +1023,9 @@ do {                                      \
                     case 3:
                         this->reset();
                         break;
+                    case 7:
+                        this->auto_wrap = 1;
+                        break;
                     case 12:
                         /* Ignore blinking cursor. */
                         break;
@@ -1049,6 +1053,9 @@ do {                                      \
                         break;
                     case 3:
                         this->reset();
+                        break;
+                    case 7:
+                        this->auto_wrap = 0;
                         break;
                     case 12:
                         /* Ignore blinking cursor. */
@@ -1453,6 +1460,7 @@ do {                                \
 
                             break;
                         }
+                        case 'k':
                         case 'P': {
                             /* Device Control String */
                             DCS dcs(p + 1);
@@ -1571,7 +1579,6 @@ dbg_out:;
                         } else {
                             this->move_cursor(1, 0);
                         }
-                        this->set_cursor(this->row(), 1);
                         break;
                     case '\t':
                         do {
@@ -1608,7 +1615,7 @@ dbg_out:;
                         }
 
                         this->set_current_cell(*git);
-                        if (this->col() == this->width()) {
+                        if (this->col() == this->width() && this->auto_wrap) {
                             wrap = 1;
                         } else {
                             this->move_cursor(0, yed_get_glyph_width(*git));
