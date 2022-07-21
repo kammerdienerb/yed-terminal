@@ -181,7 +181,7 @@ do {                      \
             NEXT();
         }
 
-        while (!IS_FINAL(c)) {
+        while (!IS_FINAL(c) && c != '\e') {
             std::string sarg;
             long        arg;
 
@@ -196,6 +196,11 @@ do {                      \
             this->args.push_back(arg);
 
             while (IS_DELIM(c)) { NEXT(); }
+        }
+
+        if (c == '\e') {
+            this->len -= 1;
+            goto out;
         }
 
         this->command  = c;
@@ -240,7 +245,7 @@ do {                      \
 
         if (c != ';' && c != CTRL_G) { goto out; }
 
-        while (c && c != CTRL_G) {
+        while (c && c != CTRL_G && c != '\e') {
             if (c == '\e') {
                 NEXT();
                 if (c == '\\') { break; }
@@ -249,7 +254,9 @@ do {                      \
             NEXT();
         }
 
-        if (c) {
+        if (c == '\e') {
+            this->len -= 1;
+        } else if (c) {
             this->complete = 1;
         }
 out:;
@@ -287,6 +294,8 @@ do {                      \
                     this->complete = 1;
                     break;
                 }
+                this->len -= 1;
+                break;;
             }
             this->str += c;
             NEXT();
@@ -659,6 +668,11 @@ struct Term {
                 while ((n = read(term->master_fd, p, BUFF_SZ)) > 0) {
                     term->data_buff.resize(((p + n) - term->data_buff.data()) + BUFF_SZ);
                     p = &(term->data_buff[term->data_buff.size() - BUFF_SZ]);
+
+                    if (term->data_buff.size() > 8192) {
+                        force_update = 1;
+                        break;
+                    }
                 }
 
                 term->data_buff.resize((p - term->data_buff.data()));
@@ -1354,11 +1368,15 @@ do {                                      \
         int                dectst     = 0;
         int                setcharset = 0;
 
-        { std::lock_guard<std::mutex> lock(this->buff_lock);
+/*         { std::lock_guard<std::mutex> lock(this->buff_lock); */
+/*  */
+/*             buff = std::move(this->data_buff); */
+/*             this->data_buff.clear(); */
+/*         } */
+        std::lock_guard<std::mutex> lock(this->buff_lock);
 
-            buff = std::move(this->data_buff);
-            this->data_buff.clear();
-        }
+        buff = std::move(this->data_buff);
+        this->data_buff.clear();
 
         if (incomplete_esc) {
             buff.insert(buff.begin(), '\e');
@@ -1581,6 +1599,7 @@ dbg_out:;
                     case 0:
                         break;
                     case '\e':
+                        if (incomplete_csi.size()) { incomplete_csi.clear(); }
                         if (!*(p + 1)) { incomplete_csi = "\e"; }
                         break;
                     case '\r':
@@ -1600,6 +1619,8 @@ dbg_out:;
                         break;
                     case '\t':
                         do {
+                            if (this->col() == this->width()) { break; }
+
                             this->set_current_cell(G(' '));
                             this->move_cursor(0, 1);
                         } while (this->col() % yed_get_tab_width() != 1);
@@ -1837,6 +1858,15 @@ out:;
     }
 };
 
+struct Binding {
+    int    len;
+    int    keys[MAX_SEQ_LEN];
+    char  *cmd;
+    int    key;
+    int    n_args;
+    char **args;
+};
+
 struct State {
     u32                       term_counter = 0;
     std::list<Term*>          terms;
@@ -1844,6 +1874,7 @@ struct State {
     std::map<yed_frame*, int> term_mode_off;
     int                       key_sequences_saved = 0;
     array_t                   key_sequences;
+    std::vector<Binding>      bindings;
 
     State() { }
 
@@ -1860,7 +1891,8 @@ struct State {
 
 #define STATE_ADDR_VAR_NAME "__term_state_addr"
 
-static State *state;
+static State      *state;
+static yed_plugin *Self;
 
 static Term * term_for_buffer(yed_buffer *buffer) {
     for (auto t : state->terms) {
@@ -1869,15 +1901,101 @@ static Term * term_for_buffer(yed_buffer *buffer) {
     return NULL;
 }
 
+static void install_bindings() {
+    for (auto &b : state->bindings) {
+        if (b.len > 1) {
+            b.key = yed_plugin_add_key_sequence(Self, b.len, b.keys);
+        } else {
+            b.key = b.keys[0];
+        }
+        yed_plugin_bind_key(Self, b.key, b.cmd, b.n_args, b.args);
+    }
+}
+
+static void uninstall_bindings() {
+    for (auto &b : state->bindings) {
+        yed_unbind_key(b.key);
+        if (b.len > 1) {
+            yed_delete_key_sequence(b.key);
+        }
+    }
+}
+
+static void update_bindings() {
+    uninstall_bindings();
+    install_bindings();
+}
+
+static void make_binding(int n_keys, int *keys, char *cmd, int n_args, char **args) {
+    Binding binding;
+
+    if (n_keys <= 0) {
+        return;
+    }
+
+    binding.len = n_keys;
+    for (int i = 0; i < n_keys; i += 1) {
+        binding.keys[i] = keys[i];
+    }
+    binding.cmd = strdup(cmd);
+    binding.key = KEY_NULL;
+    binding.n_args = n_args;
+    if (n_args) {
+        binding.args = (char**)malloc(sizeof(char*) * n_args);
+        for (int i = 0; i < n_args; i += 1) {
+            binding.args[i] = strdup(args[i]);
+        }
+    } else {
+        binding.args = NULL;
+    }
+
+    state->bindings.push_back(binding);
+
+    if (state->key_sequences_saved) {
+        update_bindings();
+    }
+}
+
+static void del_binding(int n_keys, int *keys) {
+    if (n_keys <= 0) {
+        return;
+    }
+
+    int i = 0;
+    for (auto &b : state->bindings) {
+        if (b.len == n_keys
+        &&  memcmp(b.keys, keys, n_keys * sizeof(int)) == 0) {
+            break;
+        }
+        i += 1;
+    }
+
+    if (i == state->bindings.size()) { return; }
+
+    if (state->key_sequences_saved) {
+        uninstall_bindings();
+    }
+
+    state->bindings.erase(state->bindings.begin() + i);
+
+    if (state->key_sequences_saved) {
+        install_bindings();
+    }
+}
+
 static void set_term_keys() {
     ASSERT(!state->key_sequences_saved, "key sequence save/restore mismatch");
 
     state->key_sequences       = ys->key_sequences;
     ys->key_sequences          = array_make(yed_key_sequence);
     state->key_sequences_saved = 1;
+
+    install_bindings();
 }
 
 static void restore_normal_keys() {
+    uninstall_bindings();
+
     ASSERT(state->key_sequences_saved, "key sequence save/restore mismatch");
 
     array_free(ys->key_sequences);
@@ -1955,18 +2073,16 @@ static void key(yed_event *event) {
     auto t = term_for_buffer(ys->active_frame->buffer);
     if (t == NULL || !t->term_mode) { return; }
 
+    for (auto &b : state->bindings) {
+        if (b.key == event->key) { return; }
+    }
+
     if (yed_var_is_truthy("terminal-debug-log")) {
         char *s = yed_keys_to_string(1, &event->key);
         DBG("KEY %s", s);
     }
 
     if (yed_get_real_keys(event->key, &len, keys)) {
-        if (event->key == CTRL_T) {
-            toggle_term_mode(t);
-            event->cancel = 1;
-            return;
-        }
-
         t->keys(len, keys);
         event->cancel = 1;
         yed_force_update();
@@ -2215,6 +2331,59 @@ static void toggle_term_mode_cmd(int n_args, char **args) {
     }
 }
 
+static void term_bind_cmd(int n_args, char **args) {
+    char            *cmd, **cmd_args;
+    int              n_keys, keys[MAX_SEQ_LEN], n_cmd_args;
+
+    if (n_args == 0) {
+        yed_cerr("missing 'keys' as first argument");
+        return;
+    }
+
+    if (n_args < 2) {
+        yed_cerr("missing 'command', 'command_args'... as second and up arguments");
+        return;
+    }
+
+    n_keys = yed_string_to_keys(args[0], keys);
+    if (n_keys == -1) {
+        yed_cerr("invalid string of keys '%s'", args[0]);
+        return;
+    }
+    if (n_keys == -2) {
+        yed_cerr("too many keys to be a sequence in '%s'", args[0]);
+        return;
+    }
+
+    cmd        = args[1];
+    n_cmd_args = n_args - 2;
+    cmd_args   = args + 2;
+
+    make_binding(n_keys, keys, cmd, n_cmd_args, cmd_args);
+}
+
+static void term_unbind_cmd(int n_args, char **args) {
+    int  n_keys, keys[MAX_SEQ_LEN];
+    int  seq_key;
+
+    if (n_args != 1) {
+        yed_cerr("expected 'keys' as first and only argument");
+        return;
+    }
+
+    n_keys = yed_string_to_keys(args[0], keys);
+    if (n_keys == -1) {
+        yed_cerr("invalid string of keys '%s'", args[0]);
+        return;
+    }
+    if (n_keys == -2) {
+        yed_cerr("too many keys to be a sequence in '%s'", args[0]);
+        return;
+    }
+
+    del_binding(n_keys, keys);
+}
+
 static void unload(yed_plugin *self) {
     if (term_mode_dd != NULL) {
         yed_kill_direct_draw(term_mode_dd);
@@ -2228,6 +2397,8 @@ int yed_plugin_boot(yed_plugin *self) {
     char  addr_buff[64];
 
     YED_PLUG_VERSION_CHECK();
+
+    Self = self;
 
     if ((state_addr_str = yed_get_var(STATE_ADDR_VAR_NAME))) {
         sscanf(state_addr_str, "%p", (void**)&state);
@@ -2279,6 +2450,8 @@ int yed_plugin_boot(yed_plugin *self) {
     std::map<const char*, void(*)(int, char**)> cmds = {
         { "term-new",         term_new_cmd         },
         { "term-open",        term_open_cmd        },
+        { "term-bind",        term_bind_cmd        },
+        { "term-unbind",      term_unbind_cmd      },
         { "toggle-term-mode", toggle_term_mode_cmd }};
 
     for (auto &pair : event_handlers) {
@@ -2297,6 +2470,8 @@ int yed_plugin_boot(yed_plugin *self) {
     for (auto &pair : cmds) {
         yed_plugin_set_command(self, pair.first, pair.second);
     }
+
+    YEXE("term-bind", "ctrl-t", "toggle-term-mode");
 
     yed_plugin_set_unload_fn(self, unload);
 
