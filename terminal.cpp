@@ -816,6 +816,10 @@ TERM_CYAN
         }
     }
     void reset() {
+        this->current_attrs = ZERO_ATTR;
+        this->app_keys      = 0;
+        this->auto_wrap     = 1;
+
         this->set_scroll(0, 0);
         this->set_cursor(1, 1);
         this->clear_page();
