@@ -738,6 +738,8 @@ struct Term {
             return;
         }
 
+        int print_welcome = yed_var_is_truthy("terminal-show-welcome");
+
         p = fork();
         if (p == 0) {
             close(this->master_fd);
@@ -745,6 +747,7 @@ struct Term {
 
             setenv("TERM", get_termvar(), 1);
 
+            if (print_welcome) {
 #if 0
             printf("Wecome to\n\n");
             printf(TERM_CYAN);
@@ -769,6 +772,8 @@ TERM_CYAN
 " \\__, |\\___|\\__,_|  \\__\\___|_|  |_| |_| |_|_|_| |_|\\__,_|_|\n"
 " |___/  \n\n" TERM_RESET);
 #endif
+
+            }
 
             char * const args[] = { (char*)get_shell(), NULL };
             execvp(get_shell(), args);
@@ -2252,6 +2257,7 @@ int yed_plugin_boot(yed_plugin *self) {
         { "terminal-shell",            get_shell()   },
         { "terminal-termvar",          get_termvar() },
         { "terminal-auto-term-mode",   "ON"          },
+        { "terminal-show-welcome",     "yes"         },
         { "terminal-color0",           "&black"      },
         { "terminal-color1",           "&red"        },
         { "terminal-color2",           "&green"      },
