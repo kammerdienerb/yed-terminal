@@ -622,6 +622,7 @@ struct Term {
     Screen            *_screen        = NULL;
     int                app_keys       = 0;
     int                auto_wrap      = 1;
+    int                wrap_next      = 0;
     std::string        title;
     int                term_mode      = 1;
 
@@ -794,12 +795,20 @@ TERM_CYAN
         yed_free_buffer(this->buffer);
     }
 
-    void set_cursor(int row, int col)    { this->screen().set_cursor(row, col);    }
-    void move_cursor(int rows, int cols) { this->screen().move_cursor(rows, cols); }
-    void save_cursor()                   { this->screen().save_cursor();           }
-    void restore_cursor()                { this->screen().restore_cursor();        }
-    int  cursor_saved()                  { return this->screen().cursor_saved;     }
-    void set_scroll(int top, int bottom) { this->screen().set_scroll(top, bottom); }
+    void move_cursor(int rows, int cols, int cancel_wrap = 1) {
+        this->screen().move_cursor(rows, cols);
+        if (cancel_wrap) { this->wrap_next = 0; }
+    }
+
+    void set_cursor(int row, int col) {
+        this->screen().set_cursor(row, col);
+        this->wrap_next = 0;
+    }
+
+    void save_cursor()                                        { this->screen().save_cursor();           }
+    void restore_cursor()                                     { this->screen().restore_cursor();        }
+    int  cursor_saved()                                       { return this->screen().cursor_saved;     }
+    void set_scroll(int top, int bottom)                      { this->screen().set_scroll(top, bottom); }
 
     int row()               { return this->screen().cursor_row;                             }
     int scrollback_row()    { return this->screen().scrollback + this->screen().cursor_row; }
@@ -819,6 +828,7 @@ TERM_CYAN
         this->current_attrs = ZERO_ATTR;
         this->app_keys      = 0;
         this->auto_wrap     = 1;
+        this->wrap_next     = 0;
 
         this->set_scroll(0, 0);
         this->set_cursor(1, 1);
@@ -1336,7 +1346,6 @@ do {                                      \
         std::vector<char>  buff;
         static std::string incomplete_csi;
         static int         incomplete_esc;
-        static int         wrap       = 0;
         int                dectst     = 0;
         int                setcharset = 0;
 
@@ -1606,7 +1615,7 @@ dbg_out:;
                             }
                         }
 
-                        if (wrap) {
+                        if (this->wrap_next) {
                             if (this->col() == this->width()) {
                                 if (this->row() == this->scbottom()) {
                                     this->scroll_up();
@@ -1615,14 +1624,14 @@ dbg_out:;
                                 }
                                 this->set_cursor(this->row(), 1);
                             }
-                            wrap = 0;
+                            this->wrap_next = 0;
                         }
 
                         this->set_current_cell(*git);
                         if (this->col() == this->width() && this->auto_wrap) {
-                            wrap = 1;
+                            this->wrap_next = 1;
                         } else {
-                            this->move_cursor(0, yed_get_glyph_width(*git));
+                            this->move_cursor(0, yed_get_glyph_width(*git), /* cancel_wrap = */ 0);
                         }
                         break;
                 }
