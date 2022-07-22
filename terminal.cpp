@@ -104,6 +104,7 @@ do {                                                               \
 #define DEFAULT_SHELL            "/bin/bash"
 #define DEFAULT_TERMVAR          "xterm-256color"
 #define DEFAULT_SCROLLBACK       10000
+#define DEFAULT_MAX_BLOCK_SIZE   16384
 
 const char *get_shell() {
     const char *shell;
@@ -134,6 +135,16 @@ int get_scrollback() {
     }
 
     return scrollback;
+}
+
+int get_max_block_size() {
+    int max;
+
+    if (!yed_get_var_as_int("terminal-max-block-size", &max)) {
+        max = DEFAULT_MAX_BLOCK_SIZE;
+    }
+
+    return max;
 }
 
 #define N_COLORS (17)
@@ -624,6 +635,7 @@ struct Term {
     std::thread        thr;
     std::mutex         buff_lock;
     std::vector<char>  data_buff;
+    int                update_waiting = 0;
     yed_buffer        *buffer         = NULL;
     yed_attrs          current_attrs  = ZERO_ATTR;
     Screen             main_screen;
@@ -688,7 +700,7 @@ struct Term {
                 }
             }
 
-            if (force_update) { yed_force_update(); }
+            if (force_update && !term->update_waiting) { yed_force_update(); }
         }
     }
 
@@ -1373,7 +1385,9 @@ do {                                      \
 /*             buff = std::move(this->data_buff); */
 /*             this->data_buff.clear(); */
 /*         } */
+        this->update_waiting = 1;
         std::lock_guard<std::mutex> lock(this->buff_lock);
+        this->update_waiting = 0;
 
         buff = std::move(this->data_buff);
         this->data_buff.clear();
@@ -1908,11 +1922,14 @@ static void install_bindings() {
         } else {
             b.key = b.keys[0];
         }
-        yed_plugin_bind_key(Self, b.key, b.cmd, b.n_args, b.args);
+        yed_plugin_map_bind_key(Self, "terminal", b.key, b.cmd, b.n_args, b.args);
     }
+    yed_enable_key_map("terminal");
 }
 
 static void uninstall_bindings() {
+    yed_disable_key_map("terminal");
+
     for (auto &b : state->bindings) {
         yed_unbind_key(b.key);
         if (b.len > 1) {
@@ -1985,19 +2002,15 @@ static void del_binding(int n_keys, int *keys) {
 
 static void set_term_keys() {
     ASSERT(!state->key_sequences_saved, "key sequence save/restore mismatch");
-
     state->key_sequences       = ys->key_sequences;
     ys->key_sequences          = array_make(yed_key_sequence);
     state->key_sequences_saved = 1;
-
     install_bindings();
 }
 
 static void restore_normal_keys() {
     uninstall_bindings();
-
     ASSERT(state->key_sequences_saved, "key sequence save/restore mismatch");
-
     array_free(ys->key_sequences);
     ys->key_sequences          = state->key_sequences;
     state->key_sequences_saved = 0;
@@ -2085,7 +2098,6 @@ static void key(yed_event *event) {
     if (yed_get_real_keys(event->key, &len, keys)) {
         t->keys(len, keys);
         event->cancel = 1;
-        yed_force_update();
     }
 }
 
@@ -2111,8 +2123,6 @@ static void ins(yed_event *event) {
 
         t->paste(text);
         if (free_text) { free((char*)text); }
-
-        yed_force_update();
 out:;
         event->cancel = 1;
     }
@@ -2264,7 +2274,7 @@ static void var(yed_event *event) {
     parse_color(which, event->var_val);
 }
 
-static void style(yed_event *event) {
+static void update_colors(void) {
     parse_color(0,        yed_get_var("terminal-color0"));
     parse_color(1,        yed_get_var("terminal-color1"));
     parse_color(2,        yed_get_var("terminal-color2"));
@@ -2282,6 +2292,10 @@ static void style(yed_event *event) {
     parse_color(14,       yed_get_var("terminal-color14"));
     parse_color(15,       yed_get_var("terminal-color15"));
     parse_color(CDEFAULT, yed_get_var("terminal-color-default"));
+}
+
+static void style(yed_event *event) {
+    update_colors();
 }
 
 static void term_new_cmd(int n_args, char **args) {
@@ -2424,28 +2438,29 @@ int yed_plugin_boot(yed_plugin *self) {
         { style,     { EVENT_STYLE_CHANGE                                   } }};
 
     std::map<const char*, const char*> vars = {
-        { "terminal-debug-log",        "OFF"         },
-        { "terminal-shell",            get_shell()   },
-        { "terminal-termvar",          get_termvar() },
-        { "terminal-auto-term-mode",   "ON"          },
-        { "terminal-show-welcome",     "yes"         },
-        { "terminal-color0",           "&black"      },
-        { "terminal-color1",           "&red"        },
-        { "terminal-color2",           "&green"      },
-        { "terminal-color3",           "&yellow"     },
-        { "terminal-color4",           "&blue"       },
-        { "terminal-color5",           "&magenta"    },
-        { "terminal-color6",           "&cyan"       },
-        { "terminal-color7",           "&grey"       },
-        { "terminal-color8",           "&grey"       },
-        { "terminal-color9",           "&red"        },
-        { "terminal-color10",          "&green"      },
-        { "terminal-color11",          "&yellow"     },
-        { "terminal-color12",          "&blue"       },
-        { "terminal-color13",          "&magenta"    },
-        { "terminal-color14",          "&cyan"       },
-        { "terminal-color15",          "&white"      },
-        { "terminal-color-default",    "&active"     }};
+        { "terminal-debug-log",        "OFF"                    },
+        { "terminal-shell",            get_shell()              },
+        { "terminal-termvar",          get_termvar()            },
+        { "terminal-scrollback",       XSTR(DEFAULT_SCROLLBACK) },
+        { "terminal-auto-term-mode",   "ON"                     },
+        { "terminal-show-welcome",     "yes"                    },
+        { "terminal-color0",           "&black"                 },
+        { "terminal-color1",           "&red"                   },
+        { "terminal-color2",           "&green"                 },
+        { "terminal-color3",           "&yellow"                },
+        { "terminal-color4",           "&blue"                  },
+        { "terminal-color5",           "&magenta"               },
+        { "terminal-color6",           "&cyan"                  },
+        { "terminal-color7",           "&grey"                  },
+        { "terminal-color8",           "&grey"                  },
+        { "terminal-color9",           "&red"                   },
+        { "terminal-color10",          "&green"                 },
+        { "terminal-color11",          "&yellow"                },
+        { "terminal-color12",          "&blue"                  },
+        { "terminal-color13",          "&magenta"               },
+        { "terminal-color14",          "&cyan"                  },
+        { "terminal-color15",          "&white"                 },
+        { "terminal-color-default",    "&active"                }};
 
     std::map<const char*, void(*)(int, char**)> cmds = {
         { "term-new",         term_new_cmd         },
@@ -2470,6 +2485,9 @@ int yed_plugin_boot(yed_plugin *self) {
     for (auto &pair : cmds) {
         yed_plugin_set_command(self, pair.first, pair.second);
     }
+
+    yed_plugin_add_key_map(self, "terminal");
+    update_colors();
 
     YEXE("term-bind", "ctrl-t", "toggle-term-mode");
 
