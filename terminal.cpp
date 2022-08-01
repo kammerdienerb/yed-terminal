@@ -664,6 +664,7 @@ struct Term {
                 continue;
             }
 
+            int max          = get_max_block_size();
             int force_update = 0;
 
             { std::lock_guard<std::mutex> lock(term->buff_lock);
@@ -681,7 +682,7 @@ struct Term {
                     term->data_buff.resize(((p + n) - term->data_buff.data()) + BUFF_SZ);
                     p = &(term->data_buff[term->data_buff.size() - BUFF_SZ]);
 
-                    if (term->data_buff.size() > 8192) {
+                    if (term->data_buff.size() > max) {
                         force_update = 1;
                         break;
                     }
@@ -1373,18 +1374,14 @@ do {                                      \
     }
 
     void update() {
-        int                do_log = yed_var_is_truthy("terminal-debug-log");
-        std::vector<char>  buff;
-        static std::string incomplete_csi;
-        static int         incomplete_esc;
-        int                dectst     = 0;
-        int                setcharset = 0;
+        int                      do_log = yed_var_is_truthy("terminal-debug-log");
+        std::vector<char>        buff;
+        static std::string       incomplete_csi;
+        static int               incomplete_esc;
+        static std::vector<char> incomplete_utf8;
+        int                      dectst     = 0;
+        int                      setcharset = 0;
 
-/*         { std::lock_guard<std::mutex> lock(this->buff_lock); */
-/*  */
-/*             buff = std::move(this->data_buff); */
-/*             this->data_buff.clear(); */
-/*         } */
         this->update_waiting = 1;
         std::lock_guard<std::mutex> lock(this->buff_lock);
         this->update_waiting = 0;
@@ -1400,6 +1397,11 @@ do {                                      \
                 buff.insert(buff.begin(), *it);
             }
             incomplete_csi.clear();
+        } else if (incomplete_utf8.size()) {
+            for (auto it = incomplete_utf8.rbegin(); it != incomplete_utf8.rend(); it++) {
+                buff.insert(buff.begin(), *it);
+            }
+            incomplete_utf8.clear();
         }
 
         if (buff.size() && buff.back() == '\e') {
@@ -1649,9 +1651,19 @@ dbg_out:;
                     put:;
                         if (iscntrl(git->c)) { goto next; }
                     put_utf8:;
-                        if (do_log && yed_get_glyph_len(*git) > 1) {
-                            for (int i = 0; i < yed_get_glyph_len(*git); i += 1) {
-                                debug += git->bytes[i];
+                        int len = yed_get_glyph_len(*git);
+                        if (len > 1) {
+                            if (p + len >= &buff.back()) {
+                                for (int i = 0; i < len; i += 1) {
+                                    incomplete_utf8.push_back(p[i]);
+                                }
+                                goto next;
+                            }
+
+                            if (do_log) {
+                                for (int i = 0; i < len; i += 1) {
+                                    debug += git->bytes[i];
+                                }
                             }
                         }
 
@@ -2438,29 +2450,30 @@ int yed_plugin_boot(yed_plugin *self) {
         { style,     { EVENT_STYLE_CHANGE                                   } }};
 
     std::map<const char*, const char*> vars = {
-        { "terminal-debug-log",        "OFF"                    },
-        { "terminal-shell",            get_shell()              },
-        { "terminal-termvar",          get_termvar()            },
-        { "terminal-scrollback",       XSTR(DEFAULT_SCROLLBACK) },
-        { "terminal-auto-term-mode",   "ON"                     },
-        { "terminal-show-welcome",     "yes"                    },
-        { "terminal-color0",           "&black"                 },
-        { "terminal-color1",           "&red"                   },
-        { "terminal-color2",           "&green"                 },
-        { "terminal-color3",           "&yellow"                },
-        { "terminal-color4",           "&blue"                  },
-        { "terminal-color5",           "&magenta"               },
-        { "terminal-color6",           "&cyan"                  },
-        { "terminal-color7",           "&grey"                  },
-        { "terminal-color8",           "&grey"                  },
-        { "terminal-color9",           "&red"                   },
-        { "terminal-color10",          "&green"                 },
-        { "terminal-color11",          "&yellow"                },
-        { "terminal-color12",          "&blue"                  },
-        { "terminal-color13",          "&magenta"               },
-        { "terminal-color14",          "&cyan"                  },
-        { "terminal-color15",          "&white"                 },
-        { "terminal-color-default",    "&active"                }};
+        { "terminal-debug-log",        "OFF"                        },
+        { "terminal-shell",            get_shell()                  },
+        { "terminal-termvar",          get_termvar()                },
+        { "terminal-scrollback",       XSTR(DEFAULT_SCROLLBACK)     },
+        { "terminal-max-block-size",   XSTR(DEFAULT_MAX_BLOCK_SIZE) },
+        { "terminal-auto-term-mode",   "ON"                         },
+        { "terminal-show-welcome",     "yes"                        },
+        { "terminal-color0",           "&black"                     },
+        { "terminal-color1",           "&red"                       },
+        { "terminal-color2",           "&green"                     },
+        { "terminal-color3",           "&yellow"                    },
+        { "terminal-color4",           "&blue"                      },
+        { "terminal-color5",           "&magenta"                   },
+        { "terminal-color6",           "&cyan"                      },
+        { "terminal-color7",           "&grey"                      },
+        { "terminal-color8",           "&grey"                      },
+        { "terminal-color9",           "&red"                       },
+        { "terminal-color10",          "&green"                     },
+        { "terminal-color11",          "&yellow"                    },
+        { "terminal-color12",          "&blue"                      },
+        { "terminal-color13",          "&magenta"                   },
+        { "terminal-color14",          "&cyan"                      },
+        { "terminal-color15",          "&white"                     },
+        { "terminal-color-default",    "&active"                    }};
 
     std::map<const char*, void(*)(int, char**)> cmds = {
         { "term-new",         term_new_cmd         },
