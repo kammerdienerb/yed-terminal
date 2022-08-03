@@ -1489,6 +1489,11 @@ do {                                \
                             /* String terminator. */
                             break;
                         case '[': {
+                            if (incomplete_csi.size()) {
+                                DBG("WARN: dumping incomplete CSI: '\\e[%s'", incomplete_csi.c_str() + 2);
+                                incomplete_csi.clear();
+                            }
+
                             CSI csi(p + 1);
 
                             DUMP_DEBUG();
@@ -1506,6 +1511,11 @@ do {                                \
                             break;
                         }
                         case ']': {
+                            if (incomplete_csi.size()) {
+                                DBG("WARN: dumping incomplete OSC: '\\e]%s'", incomplete_csi.c_str() + 2);
+                                incomplete_csi.clear();
+                            }
+
                             OSC osc(p + 1);
                             csi_countdown = osc.len;
 
