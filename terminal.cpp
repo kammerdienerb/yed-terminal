@@ -629,6 +629,7 @@ struct Term {
     int                valid          = 0;
     int                master_fd      = 0;
     int                slave_fd       = 0;
+    int                sig_fds[2]     = { 0, 0 };
     pid_t              shell_pid      = 0;
     int                process_exited = 0;
     int                bad_shell      = 0;
@@ -648,21 +649,34 @@ struct Term {
     int                term_mode      = 1;
 
     static void read_thread(Term *term) {
-        struct pollfd pfd;
+        struct pollfd pfds[2];
         ssize_t       n;
 
-        pfd.fd     = term->master_fd;
-        pfd.events = POLLIN;
+        pfds[0].fd      = term->master_fd;
+        pfds[0].events  = POLLIN;
+        pfds[0].revents = 0;
+        pfds[1].fd      = term->sig_fds[0];
+        pfds[1].events  = POLLIN;
+        pfds[1].revents = 0;
 
         for (;;) {
-            if (poll(&pfd, 1, -1) <= 0) {
+            if (poll(pfds, 2, -1) <= 0) {
                 if (errno) {
-                    errno                = 0;
-                    term->process_exited = 1;
-                    return;
+                    if (errno != EINTR) {
+                        term->process_exited = 1;
+                    }
+
+                    errno = 0;
+
+                    if (term->process_exited) {
+                        return;
+                    }
                 }
                 continue;
             }
+
+            /* The main thread has signaled us to stop. */
+            if (pfds[1].revents & POLLIN) { return; }
 
             int max          = get_max_block_size();
             int force_update = 0;
@@ -759,6 +773,12 @@ struct Term {
         ws.ws_xpixel = 0;
         ws.ws_ypixel = 0;
 
+        if (pipe(this->sig_fds) != 0) {
+            ELOG("pipe() failed with errno = %d", errno);
+            errno = 0;
+            return;
+        }
+
         if (openpty(&this->master_fd, &this->slave_fd, NULL, NULL, &ws) != 0) {
             ELOG("openpty() failed with errno = %d", errno);
             errno = 0;
@@ -775,20 +795,6 @@ struct Term {
             setenv("TERM", get_termvar(), 1);
 
             if (print_welcome) {
-#if 0
-            printf("Wecome to\n\n");
-            printf(TERM_CYAN);
-            printf(
-"██    ██ ███████ ██████      ████████ ███████ ██████  ███    ███ ██ ███    ██  █████  ██      \n"
-" ██  ██  ██      ██   ██        ██    ██      ██   ██ ████  ████ ██ ████   ██ ██   ██ ██      \n"
-"  ████   █████   ██   ██        ██    █████   ██████  ██ ████ ██ ██ ██ ██  ██ ███████ ██      \n"
-"   ██    ██      ██   ██        ██    ██      ██   ██ ██  ██  ██ ██ ██  ██ ██ ██   ██ ██      \n"
-"   ██    ███████ ██████         ██    ███████ ██   ██ ██      ██ ██ ██   ████ ██   ██ ███████ \n"
-            );
-            printf(TERM_RESET);
-            printf("\n");
-#endif
-#if 1
             printf(
 "Welcome to\n"
 TERM_CYAN
@@ -798,8 +804,6 @@ TERM_CYAN
 "| |_| |  __/ (_| | | ||  __/ |  | | | | | | | | | | (_| | |\n"
 " \\__, |\\___|\\__,_|  \\__\\___|_|  |_| |_| |_|_|_| |_|\\__,_|_|\n"
 " |___/  \n\n" TERM_RESET);
-#endif
-
             }
 
             char * const args[] = { (char*)get_shell(), NULL };
@@ -821,9 +825,18 @@ TERM_CYAN
     }
 
     ~Term() {
+        char z = 0;
+
+        write(this->sig_fds[1], &z, 1);
+
         close(this->master_fd);
         close(this->slave_fd);
+
         thr.join();
+
+        close(this->sig_fds[1]);
+        close(this->sig_fds[0]);
+
         yed_free_buffer(this->buffer);
     }
 
@@ -1881,6 +1894,12 @@ out:;
 
     void toggle_term_mode() {
         this->term_mode = !this->term_mode;
+        if (this->term_mode
+        &&  this->buffer
+        &&  this->buffer->has_selection) {
+
+            this->buffer->has_selection = 0;
+        }
     }
 };
 
@@ -2053,7 +2072,7 @@ static void update(yed_event *event) {
                 const char *s = " term-mode: OFF ";
                 int row       = f->top + 1;
                 int col       = f->left + f->width - 1 - strlen(s);
-                auto attrs    = yed_parse_attrs("&bad inverse");
+                auto attrs    = yed_parse_attrs("&bad.fg swap &active.fg");
                 term_mode_dd  = yed_direct_draw(row, col, attrs, s);
             }
         }
