@@ -1489,11 +1489,6 @@ do {                                \
                             /* String terminator. */
                             break;
                         case '[': {
-                            if (incomplete_csi.size()) {
-                                DBG("WARN: dumping incomplete CSI: '\\e[%s'", incomplete_csi.c_str() + 2);
-                                incomplete_csi.clear();
-                            }
-
                             CSI csi(p + 1);
 
                             DUMP_DEBUG();
@@ -1503,19 +1498,23 @@ do {                                \
                                 this->execute_CSI(csi);
                                 csi_countdown = csi.len;
                             } else {
-                                DBG("INCOMPLETE CSI: '\\e[%.*s'", csi.len, p + 1);
-                                incomplete_csi = p - 1;
+                                if (*(p + 1 + csi.len) == 0) {
+                                    DBG("INCOMPLETE CSI: '\\e[%.*s'", csi.len, p + 1);
+                                    incomplete_csi.clear();
+                                    incomplete_csi += "\e[";
+                                    for (int i = 0; i < csi.len; i += 1) {
+                                        incomplete_csi += *(p + 1 + i);
+                                    }
+                                } else {
+                                    DBG("WARN: invalid/incomplete CSI: '\\e[%.*s'", csi.len, p + 1);
+                                }
+
                                 csi_countdown = incomplete_csi.size();
                             }
 
                             break;
                         }
                         case ']': {
-                            if (incomplete_csi.size()) {
-                                DBG("WARN: dumping incomplete OSC: '\\e]%s'", incomplete_csi.c_str() + 2);
-                                incomplete_csi.clear();
-                            }
-
                             OSC osc(p + 1);
                             csi_countdown = osc.len;
 
@@ -1525,12 +1524,18 @@ do {                                \
                                 DBG("OSC: '\\e]%.*s'", osc.len, p + 1);
                                 this->execute_OSC(osc);
                             } else {
-                                DBG("INCOMPLETE OSC: '\\e]%.*s'", osc.len, p + 1);
-                                incomplete_csi.clear();
-                                incomplete_csi += "\e]";
-                                for (int i = 0; i < osc.len; i += 1) {
-                                    incomplete_csi += *(p + 1 + i);
+                                if (*(p + 1 + osc.len) == 0) {
+                                    DBG("INCOMPLETE OSC: '\\e]%.*s'", osc.len, p + 1);
+                                    incomplete_csi.clear();
+                                    incomplete_csi += "\e]";
+                                    for (int i = 0; i < osc.len; i += 1) {
+                                        incomplete_csi += *(p + 1 + i);
+                                    }
+                                } else {
+                                    DBG("WARN: invalid/incomplete OSC: '\\e]%.*s'", osc.len, p + 1);
                                 }
+
+                                csi_countdown = incomplete_csi.size();
                             }
 
                             break;
