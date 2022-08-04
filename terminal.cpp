@@ -2349,7 +2349,7 @@ static void term_new_cmd(int n_args, char **args) {
     yed_cprint("new terminal buffer %s", t->buffer->name);
 }
 
-static void term_open_cmd(int n_args, char **args) {
+static void _term_open_cmd(int n_args, char **args, int newframe) {
     if (n_args > 1) {
         yed_cerr("expected 0 or 1 arguments, but got %d", n_args);
         return;
@@ -2373,8 +2373,19 @@ static void term_open_cmd(int n_args, char **args) {
         t = state->new_term();
     }
 
-    YEXE("special-buffer-prepare-focus", t->buffer->name);
+    if (newframe) {
+        YEXE("special-buffer-prepare-focus", t->buffer->name);
+    }
+
     YEXE("buffer", t->buffer->name);
+}
+
+static void term_open_cmd(int n_args, char **args) {
+    _term_open_cmd(n_args, args, 1);
+}
+
+static void term_open_no_frame_cmd(int n_args, char **args) {
+    _term_open_cmd(n_args, args, 0);
 }
 
 static void toggle_term_mode_cmd(int n_args, char **args) {
@@ -2510,11 +2521,12 @@ int yed_plugin_boot(yed_plugin *self) {
         { "terminal-color-default",    "&active"                    }};
 
     std::map<const char*, void(*)(int, char**)> cmds = {
-        { "term-new",         term_new_cmd         },
-        { "term-open",        term_open_cmd        },
-        { "term-bind",        term_bind_cmd        },
-        { "term-unbind",      term_unbind_cmd      },
-        { "toggle-term-mode", toggle_term_mode_cmd }};
+        { "term-new",           term_new_cmd           },
+        { "term-open",          term_open_cmd          },
+        { "term-open-no-frame", term_open_no_frame_cmd },
+        { "term-bind",          term_bind_cmd          },
+        { "term-unbind",        term_unbind_cmd        },
+        { "toggle-term-mode",   toggle_term_mode_cmd   }};
 
     for (auto &pair : event_handlers) {
         for (auto evt : pair.second) {
