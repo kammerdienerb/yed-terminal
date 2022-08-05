@@ -388,11 +388,6 @@ struct Screen {
         this->cursor_saved = 0;
     }
 
-    void make_line_dirty_abs(int row) {
-        auto &line = (*this)[row - 1];
-        line.dirty = 1;
-    }
-
     void make_dirty() {
         for (auto linep : this->lines) { linep->dirty = 1; }
     }
@@ -400,53 +395,6 @@ struct Screen {
     void _delete_line(int which) {
         delete this->lines[which];
         this->lines.erase(this->lines.begin() + which);
-    }
-
-    void set_dimensions(int width, int height) {
-        int num_lines;
-        int max_width;
-
-        num_lines = height + this->scrollback;
-
-        if (num_lines > this->lines.size()) {
-            while (this->lines.size() < num_lines) {
-                this->lines.push_back(new Line(width, this->attrs));
-            }
-        } else {
-            while (this->lines.size() > num_lines) {
-                this->_delete_line(0);
-            }
-        }
-
-        max_width = width;
-        for (auto linep : this->lines) {
-            if (linep->size() > max_width) {
-                max_width = linep->size();
-            }
-        }
-
-        if (max_width > this->width) {
-            for (auto linep : this->lines) {
-                auto &line = *linep;
-                line.resize(max_width);
-                for (int i = this->width; i < max_width; i += 1) {
-                    auto &cell = line[i];
-                    cell.glyph = G(0);
-                    cell.attrs = this->attrs;
-                }
-            }
-        }
-
-        this->width  = width;
-        this->height = height;
-
-        LIMIT(this->scroll_t, 0, this->height);
-        LIMIT(this->scroll_b, 0, this->height);
-
-        for (int row = this->scrollback + 1; row < this->scrollback + this->height; row += 1) {
-            auto &line = *(this->lines[row - 1]);
-            line.dirty = 1;
-        }
     }
 
     void set_scroll(int top, int bottom) {
@@ -588,6 +536,63 @@ struct Screen {
         }
 
         ASSERT(this->lines.size() == this->scrollback + this->height, "rows mismatch");
+    }
+
+    void set_dimensions(int width, int height, yed_buffer *buffer) {
+        int num_lines;
+        int max_width;
+
+        num_lines = height + this->scrollback;
+
+        if (num_lines > this->lines.size()) {
+            while (this->lines.size() < num_lines) {
+                this->lines.push_back(new Line(width, this->attrs));
+            }
+        } else {
+            while (this->lines.size() > num_lines) {
+                auto linep = this->lines.back();
+                auto &line = *linep;
+
+                if (line[0].glyph.data == 0) {
+                    this->_delete_line(this->lines.size() - 1);
+                } else {
+                    this->_delete_line(0);
+                }
+            }
+        }
+
+        max_width = width;
+        for (auto linep : this->lines) {
+            if (linep->size() > max_width) {
+                max_width = linep->size();
+            }
+        }
+
+        if (max_width > this->width) {
+            for (auto linep : this->lines) {
+                auto &line = *linep;
+                line.resize(max_width);
+                for (int i = this->width; i < max_width; i += 1) {
+                    auto &cell = line[i];
+                    cell.glyph = G(0);
+                    cell.attrs = this->attrs;
+                }
+            }
+        }
+
+        this->width  = width;
+        this->height = height;
+
+        LIMIT(this->scroll_t, 0, this->height);
+        LIMIT(this->scroll_b, 0, this->height);
+
+        LIMIT(this->cursor_row, 1, this->height);
+        LIMIT(this->cursor_col, 1, this->width);
+
+        for (int row = MAX(1, this->scrollback - this->height); row < this->scrollback + this->height; row += 1) {
+            auto &line = *(this->lines[row - 1]);
+            line.dirty = 1;
+        }
     }
 
     void write_to_buffer(yed_buffer *buffer) {
@@ -736,19 +741,27 @@ struct Term {
             return;
         }
 
-        this->main_screen.set_dimensions(width, height);
-        this->alt_screen.set_dimensions(width, height);
-
         { BUFF_WRITABLE_GUARD(this->buffer);
-            int n_rows = this->screen().lines.size();
+            int n_rows = this->screen().scrollback + height;
+
             if (yed_buff_n_lines(this->buffer) < n_rows) {
                 while (yed_buff_n_lines(this->buffer) < n_rows) {
-                    yed_buff_insert_line_no_undo(this->buffer, 1);
+                    yed_buffer_add_line_no_undo(this->buffer);
                 }
             } else while (yed_buff_n_lines(this->buffer) > n_rows) {
-                yed_buff_delete_line_no_undo(this->buffer, 1);
+                auto linep = this->screen().lines.back();
+                auto &line = *linep;
+
+                if (line[0].glyph.data == 0) {
+                    yed_buff_delete_line_no_undo(this->buffer, yed_buff_n_lines(this->buffer));
+                } else {
+                    yed_buff_delete_line_no_undo(this->buffer, 1);
+                }
             }
         }
+
+        this->main_screen.set_dimensions(width, height, this->buffer);
+        this->alt_screen.set_dimensions(width, height, this->buffer);
 
         ASSERT(yed_buff_n_lines(this->buffer) == this->screen().scrollback + height,
                "buff wrong size");
@@ -902,7 +915,7 @@ TERM_CYAN
     void delete_line(int row) { this->screen().delete_line(row, this->buffer); }
 
     void set_cursor_in_frame(yed_frame *frame) {
-        yed_set_cursor_within_frame(frame, this->scrollback_row() + this->height(), this->col());
+        yed_set_cursor_within_frame(frame, this->scrollback_row() + this->height() - (this->height() <= 1), this->col());
         yed_set_cursor_within_frame(frame, this->scrollback_row(), this->col());
     }
 
