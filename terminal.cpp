@@ -825,6 +825,7 @@ TERM_CYAN
         } else {
             int flags = fcntl(this->master_fd, F_GETFL);
             int err = fcntl(this->master_fd, F_SETFL, flags | O_NONBLOCK);
+            (void)err;
 
             this->shell_pid = p;
 
@@ -1394,7 +1395,7 @@ do {                                      \
                 break;
             default:
                 DBG("  UNRECOGNIZED OSC");
-            unhandled:;
+/*             unhandled:; */
                 DBG("  UNHANDLED OSC %ld", osc.command);
         }
     }
@@ -1731,7 +1732,6 @@ dbg_out:;
 next:;
                 last = *git;
             }
-out:;
         }
 
         this->write_to_buffer();
@@ -2087,8 +2087,7 @@ static void toggle_term_mode(Term *t) {
 
 static yed_direct_draw_t *term_mode_dd = NULL;
 static void update(yed_event *event) {
-    yed_frame **fit;
-    yed_frame  *f;
+    yed_frame *f;
 
     if (term_mode_dd != NULL) { yed_kill_direct_draw(term_mode_dd); term_mode_dd = NULL; }
 
@@ -2205,7 +2204,6 @@ static void line(yed_event *event) {
 static void row(yed_event *event) {
     yed_frame  *frame;
     yed_buffer *buff;
-    yed_attrs  *ait;
 
     frame = event->frame;
     if (frame == NULL) { return; }
@@ -2447,8 +2445,7 @@ static void term_bind_cmd(int n_args, char **args) {
 }
 
 static void term_unbind_cmd(int n_args, char **args) {
-    int  n_keys, keys[MAX_SEQ_LEN];
-    int  seq_key;
+    int n_keys, keys[MAX_SEQ_LEN];
 
     if (n_args != 1) {
         yed_cerr("expected 'keys' as first and only argument");
