@@ -641,6 +641,7 @@ struct Term {
     std::thread        thr;
     std::mutex         buff_lock;
     std::vector<char>  data_buff;
+    int                delay_update   = 0;
     int                update_waiting = 0;
     yed_buffer        *buffer         = NULL;
     yed_attrs          current_attrs  = ZERO_ATTR;
@@ -767,6 +768,8 @@ struct Term {
                "buff wrong size");
 
         DBG("new size %dx%d", width, height);
+
+        this->delay_update = 1;
     }
 
 
@@ -1408,6 +1411,11 @@ do {                                      \
         static std::vector<char> incomplete_utf8;
         int                      dectst     = 0;
         int                      setcharset = 0;
+
+        if (this->delay_update) {
+            this->delay_update = 0;
+            return;
+        }
 
         this->update_waiting = 1;
         std::lock_guard<std::mutex> lock(this->buff_lock);
