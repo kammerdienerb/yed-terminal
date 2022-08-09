@@ -1971,6 +1971,15 @@ struct State {
 
         return t;
     }
+
+    Term * new_term(int num) {
+        Term *t = new Term(num);
+        if (!t->valid) { return NULL; }
+
+        this->terms.push_back(t);
+
+        return t;
+    }
 };
 
 #define STATE_ADDR_VAR_NAME "__term_state_addr"
@@ -2380,7 +2389,10 @@ static void _term_open_cmd(int n_args, char **args, int newframe) {
     Term *t = NULL;
     if (n_args) {
         char buff[32];
-        snprintf(buff, sizeof(buff), "*term%s", args[0]);
+        int num = s_to_i(args[0]);
+
+        snprintf(buff, sizeof(buff), "*term%d", num);
+
         if (yed_buffer *buffer = yed_get_buffer(buff)) {
             t = term_for_buffer(buffer);
             if (t == NULL) {
@@ -2388,8 +2400,7 @@ static void _term_open_cmd(int n_args, char **args, int newframe) {
                 return;
             }
         } else {
-            yed_cerr("no buffer named '*term%s'", args[0]);
-            return;
+            t = state->new_term(num);
         }
     } else {
         t = state->new_term();
