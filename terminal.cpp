@@ -1392,6 +1392,9 @@ do {                                      \
                     write(this->master_fd, buff, strlen(buff));
                 }
                 break;
+            case 52:
+                printf("\e]52;c;%s\a", osc.arg.c_str() + 2);
+                break;
             }
             case 104: case 110: case 111:
                 /* Ignore color reset. */
@@ -2107,7 +2110,7 @@ static void update(yed_event *event) {
                 const char *s = " term-mode: OFF ";
                 int row       = f->top + 1;
                 int col       = f->left + f->width - 1 - strlen(s);
-                auto attrs    = yed_parse_attrs("&bad.fg swap &active.fg");
+                auto attrs    = yed_parse_attrs("&red.fg swap &active.fg");
                 term_mode_dd  = yed_direct_draw(row, col, attrs, s);
             }
         }
@@ -2407,6 +2410,34 @@ static void term_open_no_frame_cmd(int n_args, char **args) {
     _term_open_cmd(n_args, args, 0);
 }
 
+static void term_feed_keys_cmd(int n_args, char **args) {
+    yed_buffer *buffer;
+    int         n;
+    int         keys[MAX_SEQ_LEN];
+
+    if (n_args < 2) {
+        yed_cerr("expected 2 or more arguments, but got %d", n_args);
+        return;
+    }
+
+    buffer = yed_get_buffer(args[0]);
+    if (buffer == NULL) {
+        yed_cerr("unknown buffer '%s'", args[0]);
+        return;
+    }
+
+    if (auto t = term_for_buffer(buffer)) {
+        for (int i = 1; i < n_args; i += 1) {
+            if ((n = yed_string_to_keys(args[i], keys)) > 0) {
+                t->keys(n, keys);
+            }
+        }
+    } else {
+        yed_cerr("'%s' is not a terminal buffer", args[0]);
+        return;
+    }
+}
+
 static void toggle_term_mode_cmd(int n_args, char **args) {
     if (ys->active_frame == NULL) {
         yed_cerr("no active frame");
@@ -2527,8 +2558,8 @@ int yed_plugin_boot(yed_plugin *self) {
         { "terminal-color4",           "&blue"                      },
         { "terminal-color5",           "&magenta"                   },
         { "terminal-color6",           "&cyan"                      },
-        { "terminal-color7",           "&grey"                      },
-        { "terminal-color8",           "&grey"                      },
+        { "terminal-color7",           "&gray"                      },
+        { "terminal-color8",           "&gray"                      },
         { "terminal-color9",           "&red"                       },
         { "terminal-color10",          "&green"                     },
         { "terminal-color11",          "&yellow"                    },
@@ -2542,6 +2573,7 @@ int yed_plugin_boot(yed_plugin *self) {
         { "term-new",           term_new_cmd           },
         { "term-open",          term_open_cmd          },
         { "term-open-no-frame", term_open_no_frame_cmd },
+        { "term-feed-keys",     term_feed_keys_cmd     },
         { "term-bind",          term_bind_cmd          },
         { "term-unbind",        term_unbind_cmd        },
         { "toggle-term-mode",   toggle_term_mode_cmd   }};
