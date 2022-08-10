@@ -607,8 +607,7 @@ struct Screen {
                 int n = line.size();
 
                 for (; n >= 1; n -= 1) {
-                    if (line[n - 1].glyph.c     != 0
-                    ||  line[n - 1].attrs.flags != 0) { break; }
+                    if (line[n - 1].glyph.c != 0) { break; }
                 }
 
                 yed_clear_line(&new_line);
