@@ -1771,7 +1771,9 @@ next:;
                 case ARROW_UP:
                 case ARROW_DOWN:
                 case ARROW_RIGHT:
-                case ARROW_LEFT: {
+                case ARROW_LEFT:
+                case HOME_KEY:
+                case END_KEY: {
                     char chars[2] = { '\e', this->app_keys ? 'O' : '[' };
                     write(this->master_fd, chars, 2);
                     break;
@@ -1793,13 +1795,13 @@ next:;
                     write(this->master_fd, "D", 1);
                     break;
                 case DEL_KEY:
-                    write(this->master_fd, "\e[3~", 4);
+                    write(this->master_fd, "P", 1);
                     break;
                 case HOME_KEY:
-                    write(this->master_fd, "\e[1~", 4);
+                    write(this->master_fd, "H", 1);
                     break;
                 case END_KEY:
-                    write(this->master_fd, "\e[4~", 4);
+                    write(this->master_fd, "F", 1);
                     break;
                 case PAGE_UP:
                     write(this->master_fd, "\e[5~", 4);
