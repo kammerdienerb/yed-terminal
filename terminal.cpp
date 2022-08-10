@@ -2120,7 +2120,7 @@ static void update(yed_event *event) {
                 const char *s = " term-mode: OFF ";
                 int row       = f->top + 1;
                 int col       = f->left + f->width - 1 - strlen(s);
-                auto attrs    = yed_parse_attrs("&red.fg swap &active.fg");
+                auto attrs    = yed_parse_attrs("&red.fg &active.bg swap");
                 term_mode_dd  = yed_direct_draw(row, col, attrs, s);
             }
         }
