@@ -1233,6 +1233,7 @@ do {                                      \
                                     this->current_attrs.flags &= ~(ATTR_16 | ATTR_16_LIGHT_FG | ATTR_16_LIGHT_BG | ATTR_RGB);
                                     this->current_attrs.flags |= ATTR_256;
                                     this->current_attrs.fg     = csi.args[0];
+                                    if (this->current_attrs.fg == 0) { this->current_attrs.fg = 16; }
                                     SHIFT();
                                     break;
                             }
@@ -1264,6 +1265,7 @@ do {                                      \
                                     this->current_attrs.flags &= ~(ATTR_16 | ATTR_16_LIGHT_FG | ATTR_16_LIGHT_BG | ATTR_RGB);
                                     this->current_attrs.flags |= ATTR_256;
                                     this->current_attrs.bg     = csi.args[0];
+                                    if (this->current_attrs.bg == 0) { this->current_attrs.bg = 16; }
                                     SHIFT();
                                     break;
                             }
