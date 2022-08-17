@@ -607,7 +607,8 @@ struct Screen {
                 int n = line.size();
 
                 for (; n >= 1; n -= 1) {
-                    if (line[n - 1].glyph.c != 0) { break; }
+                    if (line[n - 1].glyph.c != 0
+                    ||  line[n - 1].attrs.flags != 0) { break; }
                 }
 
                 yed_clear_line(&new_line);
@@ -1212,8 +1213,8 @@ do {                                      \
                             break;
                         case 30: case 31: case 32: case 33: case 34: case 35: case 36: case 37:
                             this->current_attrs.flags &= ~ATTR_16_LIGHT_FG;
-                            this->current_attrs.flags |= ATTR_16;
-                            this->current_attrs.fg     = cmd;
+                            ATTR_SET_FG_KIND(this->current_attrs.flags, ATTR_KIND_16);
+                            this->current_attrs.fg = cmd;
                             break;
                         case 38: {
                             auto which = csi.args[0];
@@ -1223,28 +1224,27 @@ do {                                      \
                                     auto r = csi.args[0]; SHIFT();
                                     auto g = csi.args[0]; SHIFT();
                                     auto b = csi.args[0]; SHIFT();
-                                    this->current_attrs.flags &= ~(ATTR_16 | ATTR_16_LIGHT_FG | ATTR_16_LIGHT_BG | ATTR_256);
-                                    this->current_attrs.flags |= ATTR_RGB;
+                                    ATTR_SET_FG_KIND(this->current_attrs.flags, ATTR_KIND_RGB);
                                     this->current_attrs.fg     = RGB_32(r, g, b);
-                                    if (this->current_attrs.fg == 0) { this->current_attrs.fg = RGB_32(1, 1, 1); }
+                                    this->current_attrs.flags &= ~(ATTR_16_LIGHT_FG | ATTR_16_LIGHT_BG);
                                     break;
                                 }
                                 case 5:
-                                    this->current_attrs.flags &= ~(ATTR_16 | ATTR_16_LIGHT_FG | ATTR_16_LIGHT_BG | ATTR_RGB);
-                                    this->current_attrs.flags |= ATTR_256;
+                                    ATTR_SET_FG_KIND(this->current_attrs.flags, ATTR_KIND_256);
                                     this->current_attrs.fg     = csi.args[0];
-                                    if (this->current_attrs.fg == 0) { this->current_attrs.fg = 16; }
+                                    this->current_attrs.flags &= ~(ATTR_16_LIGHT_FG | ATTR_16_LIGHT_BG);
                                     SHIFT();
                                     break;
                             }
                             break;
                         }
                         case 39:
+                            ATTR_SET_FG_KIND(this->current_attrs.flags, ATTR_KIND_NONE);
                             this->current_attrs.fg = 0;
                             break;
                         case 40: case 41: case 42: case 43: case 44: case 45: case 46: case 47:
                             this->current_attrs.flags &= ~ATTR_16_LIGHT_BG;
-                            this->current_attrs.flags |= ATTR_16;
+                            ATTR_SET_BG_KIND(this->current_attrs.flags, ATTR_KIND_16);
                             this->current_attrs.bg     = cmd - 10;
                             break;
                         case 48: {
@@ -1255,31 +1255,32 @@ do {                                      \
                                     auto r = csi.args[0]; SHIFT();
                                     auto g = csi.args[0]; SHIFT();
                                     auto b = csi.args[0]; SHIFT();
-                                    this->current_attrs.flags &= ~(ATTR_16 | ATTR_16_LIGHT_FG | ATTR_16_LIGHT_BG | ATTR_256);
-                                    this->current_attrs.flags |= ATTR_RGB;
+                                    ATTR_SET_BG_KIND(this->current_attrs.flags, ATTR_KIND_RGB);
                                     this->current_attrs.bg     = RGB_32(r, g, b);
-                                    if (this->current_attrs.bg == 0) { this->current_attrs.bg = RGB_32(1, 1, 1); }
+                                    this->current_attrs.flags &= ~(ATTR_16_LIGHT_FG | ATTR_16_LIGHT_BG);
                                     break;
                                 }
                                 case 5:
-                                    this->current_attrs.flags &= ~(ATTR_16 | ATTR_16_LIGHT_FG | ATTR_16_LIGHT_BG | ATTR_RGB);
-                                    this->current_attrs.flags |= ATTR_256;
+                                    ATTR_SET_BG_KIND(this->current_attrs.flags, ATTR_KIND_256);
                                     this->current_attrs.bg     = csi.args[0];
-                                    if (this->current_attrs.bg == 0) { this->current_attrs.bg = 16; }
+                                    this->current_attrs.flags &= ~(ATTR_16_LIGHT_FG | ATTR_16_LIGHT_BG);
                                     SHIFT();
                                     break;
                             }
                             break;
                         }
                         case 49:
+                            ATTR_SET_BG_KIND(this->current_attrs.flags, ATTR_KIND_NONE);
                             this->current_attrs.bg = 0;
                             break;
                         case 90: case 91: case 92: case 93: case 94: case 95: case 96: case 97:
-                            this->current_attrs.flags |= ATTR_16 | ATTR_16_LIGHT_FG;
+                            ATTR_SET_FG_KIND(this->current_attrs.flags, ATTR_KIND_16);
+                            this->current_attrs.flags |= ATTR_16_LIGHT_FG;
                             this->current_attrs.fg     = cmd - 60;
                             break;
                         case 100: case 101: case 102: case 103: case 104: case 105: case 106: case 107:
-                            this->current_attrs.flags |= ATTR_16 | ATTR_16_LIGHT_BG;
+                            ATTR_SET_BG_KIND(this->current_attrs.flags, ATTR_KIND_16);
+                            this->current_attrs.flags |= ATTR_16_LIGHT_BG;
                             this->current_attrs.bg     = cmd - 70;
                             break;
                         default:
@@ -1910,22 +1911,16 @@ next:;
             if (col > this->screen()[row - 1].size()) { break; }
             yed_attrs attrs = this->screen()[row - 1][col - 1].attrs;
 
-            if (attrs.flags   & ATTR_16
-            &&  !(attrs.flags & ATTR_256)
-            &&  !(attrs.flags & ATTR_RGB)) {
+            if (ATTR_FG_KIND(attrs.flags) == ATTR_KIND_16 && attrs.fg >= 30 && attrs.fg <= 37) {
+                int fg = attrs.fg - 30 + (!!(attrs.flags & ATTR_16_LIGHT_FG)) * 8;
+                ATTR_SET_FG_KIND(attrs.flags, ATTR_FG_KIND(colors[fg].flags));
+                attrs.fg = colors[fg].fg;
+            }
 
-                attrs.flags &= ~(ATTR_16 | ATTR_256 | ATTR_RGB);
-
-                if (attrs.fg >= 30 && attrs.fg <= 37) {
-                    int fg = attrs.fg - 30 + (!!(attrs.flags & ATTR_16_LIGHT_FG)) * 8;
-                    attrs.flags |= colors[fg].flags & (ATTR_16 | ATTR_256 | ATTR_RGB);
-                    attrs.fg = colors[fg].fg;
-                }
-                if (attrs.bg >= 30 && attrs.bg <= 37) {
-                    int bg = attrs.bg - 30 + (!!(attrs.flags & ATTR_16_LIGHT_BG)) * 8;
-                    attrs.flags |= colors[bg].flags & (ATTR_16 | ATTR_256 | ATTR_RGB);
-                    attrs.bg = colors[bg].fg;
-                }
+            if (ATTR_BG_KIND(attrs.flags) == ATTR_KIND_16 && attrs.bg >= 30 && attrs.bg <= 37) {
+                int bg = attrs.bg - 30 + (!!(attrs.flags & ATTR_16_LIGHT_BG)) * 8;
+                ATTR_SET_BG_KIND(attrs.flags, ATTR_FG_KIND(colors[bg].flags));
+                attrs.bg = colors[bg].fg;
             }
 
             yed_combine_attrs(ait, &attrs);
