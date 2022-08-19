@@ -1902,12 +1902,14 @@ next:;
         }
     }
 
-    void apply_attrs(yed_frame *frame, int row, array_t *line_attrs) {
-        int        col;
-        yed_attrs *ait;
+    void apply_attrs(yed_event *event) {
+        yed_frame *frame;
+        int        row;
 
-        col = 1;
-        array_traverse(*line_attrs, ait) {
+        frame = event->frame;
+        row   = event->row;
+
+        for (int col = 1; col <= this->width(); col += 1) {
             if (col > this->screen()[row - 1].size()) { break; }
             yed_attrs attrs = this->screen()[row - 1][col - 1].attrs;
 
@@ -1923,9 +1925,7 @@ next:;
                 attrs.bg = colors[bg].fg;
             }
 
-            yed_combine_attrs(ait, &attrs);
-
-            col += 1;
+            yed_eline_combine_col_attrs(event, col, &attrs);
         }
     }
 
@@ -2215,7 +2215,7 @@ static void line(yed_event *event) {
     if (buff == NULL) { return; }
 
     if (auto t = term_for_buffer(buff)) {
-        t->apply_attrs(event->frame, event->row, &event->line_attrs);
+        t->apply_attrs(event);
     }
 }
 
