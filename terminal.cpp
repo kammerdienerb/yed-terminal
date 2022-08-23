@@ -2447,6 +2447,49 @@ static void term_feed_keys_cmd(int n_args, char **args) {
     }
 }
 
+static void term_feed_text_cmd(int n_args, char **args) {
+    yed_buffer *buffer;
+    int         last_was_backslash;
+    int         key;
+
+    if (n_args != 2) {
+        yed_cerr("expected 2 arguments, but got %d", n_args);
+        return;
+    }
+
+    buffer = yed_get_buffer(args[0]);
+    if (buffer == NULL) {
+        yed_cerr("unknown buffer '%s'", args[0]);
+        return;
+    }
+
+    if (auto t = term_for_buffer(buffer)) {
+        last_was_backslash = 0;
+        for (int i = 0; i < strlen(args[1]); i += 1) {
+            key = args[1][i];
+
+            if (last_was_backslash) {
+                last_was_backslash = 0;
+                switch (key) {
+                    case 'n':  key = ENTER; break;
+                    case 't':  key = TAB;   break;
+                    case '\\':              break;
+                    default:
+                        continue;
+                }
+            } else if (key == '\\') {
+                last_was_backslash = 1;
+                continue;
+            }
+
+            t->keys(1, &key);
+        }
+    } else {
+        yed_cerr("'%s' is not a terminal buffer", args[0]);
+        return;
+    }
+}
+
 static void toggle_term_mode_cmd(int n_args, char **args) {
     if (ys->active_frame == NULL) {
         yed_cerr("no active frame");
@@ -2457,6 +2500,54 @@ static void toggle_term_mode_cmd(int n_args, char **args) {
         toggle_term_mode(t);
     } else {
         yed_cerr("active frame does not have a terminal buffer in it");
+        return;
+    }
+}
+
+static void term_mode_off_cmd(int n_args, char **args) {
+    yed_buffer *buffer;
+
+    if (n_args != 1) {
+        yed_cerr("expected 1 argument, but got %d", n_args);
+        return;
+    }
+
+    buffer = yed_get_buffer(args[0]);
+    if (buffer == NULL) {
+        yed_cerr("unknown buffer '%s'", args[0]);
+        return;
+    }
+
+    if (auto t = term_for_buffer(buffer)) {
+        if (t->term_mode) {
+            toggle_term_mode(t);
+        }
+    } else {
+        yed_cerr("'%s' is not a terminal buffer", args[0]);
+        return;
+    }
+}
+
+static void term_mode_on_cmd(int n_args, char **args) {
+    yed_buffer *buffer;
+
+    if (n_args != 1) {
+        yed_cerr("expected 1 argument, but got %d", n_args);
+        return;
+    }
+
+    buffer = yed_get_buffer(args[0]);
+    if (buffer == NULL) {
+        yed_cerr("unknown buffer '%s'", args[0]);
+        return;
+    }
+
+    if (auto t = term_for_buffer(buffer)) {
+        if (!t->term_mode) {
+            toggle_term_mode(t);
+        }
+    } else {
+        yed_cerr("'%s' is not a terminal buffer", args[0]);
         return;
     }
 }
@@ -2583,8 +2674,11 @@ int yed_plugin_boot(yed_plugin *self) {
         { "term-open",          term_open_cmd          },
         { "term-open-no-frame", term_open_no_frame_cmd },
         { "term-feed-keys",     term_feed_keys_cmd     },
+        { "term-feed-text",     term_feed_text_cmd     },
         { "term-bind",          term_bind_cmd          },
         { "term-unbind",        term_unbind_cmd        },
+        { "term-mode-off",      term_mode_off_cmd      },
+        { "term-mode-on",       term_mode_on_cmd       },
         { "toggle-term-mode",   toggle_term_mode_cmd   }};
 
     for (auto &pair : event_handlers) {
