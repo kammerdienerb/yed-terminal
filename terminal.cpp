@@ -266,8 +266,13 @@ do {                      \
         }
 
         if (c == '\e') {
-            this->len -= 1;
-        } else if (c) {
+            NEXT();
+            if (c == '\\') {
+                this->complete = 1;
+            } else {
+                this->len -= 1;
+            }
+        } else {
             this->complete = 1;
         }
 out:;
