@@ -147,9 +147,11 @@ int get_max_block_size() {
     return max;
 }
 
-#define N_COLORS (17)
+#define N_COLORS (18)
 static yed_attrs colors[N_COLORS];
-#define CDEFAULT (N_COLORS - 1)
+
+#define CDEFAULT          (N_COLORS - 2)
+#define CDEFAULT_INACTIVE (N_COLORS - 1)
 
 #define MODE_RESET ('!')
 #define MODE_PRIV  ('?')
@@ -2230,7 +2232,9 @@ static void row(yed_event *event) {
     if (buff == NULL) { return; }
 
     if (auto t = term_for_buffer(buff)) {
-        event->row_base_attr = colors[CDEFAULT];
+        event->row_base_attr = frame == ys->active_frame
+                                    ? colors[CDEFAULT]
+                                    : colors[CDEFAULT_INACTIVE];
     }
 }
 
@@ -2340,33 +2344,38 @@ static void var(yed_event *event) {
     if (event->var_name == NULL || event->var_val == NULL) { return; }
     if (strncmp(event->var_name, start, start_len) != 0)   { return; }
 
-    which = strcmp(event->var_name, "terminal-color-default") == 0
-                ? CDEFAULT
-                : s_to_i(event->var_name + start_len);
+    if (strcmp(event->var_name, "terminal-color-default") == 0) {
+        which = CDEFAULT;
+    } else if (strcmp(event->var_name, "terminal-color-default-inactive") == 0) {
+        which = CDEFAULT_INACTIVE;
+    } else {
+        which = s_to_i(event->var_name + start_len);
 
-    if (which < 0 || which > 15) { return; }
+        if (which < 0 || which > 15) { return; }
+    }
 
     parse_color(which, event->var_val);
 }
 
 static void update_colors(void) {
-    parse_color(0,        yed_get_var("terminal-color0"));
-    parse_color(1,        yed_get_var("terminal-color1"));
-    parse_color(2,        yed_get_var("terminal-color2"));
-    parse_color(3,        yed_get_var("terminal-color3"));
-    parse_color(4,        yed_get_var("terminal-color4"));
-    parse_color(5,        yed_get_var("terminal-color5"));
-    parse_color(6,        yed_get_var("terminal-color6"));
-    parse_color(7,        yed_get_var("terminal-color7"));
-    parse_color(8,        yed_get_var("terminal-color8"));
-    parse_color(9,        yed_get_var("terminal-color9"));
-    parse_color(10,       yed_get_var("terminal-color10"));
-    parse_color(11,       yed_get_var("terminal-color11"));
-    parse_color(12,       yed_get_var("terminal-color12"));
-    parse_color(13,       yed_get_var("terminal-color13"));
-    parse_color(14,       yed_get_var("terminal-color14"));
-    parse_color(15,       yed_get_var("terminal-color15"));
-    parse_color(CDEFAULT, yed_get_var("terminal-color-default"));
+    parse_color(0,                 yed_get_var("terminal-color0"));
+    parse_color(1,                 yed_get_var("terminal-color1"));
+    parse_color(2,                 yed_get_var("terminal-color2"));
+    parse_color(3,                 yed_get_var("terminal-color3"));
+    parse_color(4,                 yed_get_var("terminal-color4"));
+    parse_color(5,                 yed_get_var("terminal-color5"));
+    parse_color(6,                 yed_get_var("terminal-color6"));
+    parse_color(7,                 yed_get_var("terminal-color7"));
+    parse_color(8,                 yed_get_var("terminal-color8"));
+    parse_color(9,                 yed_get_var("terminal-color9"));
+    parse_color(10,                yed_get_var("terminal-color10"));
+    parse_color(11,                yed_get_var("terminal-color11"));
+    parse_color(12,                yed_get_var("terminal-color12"));
+    parse_color(13,                yed_get_var("terminal-color13"));
+    parse_color(14,                yed_get_var("terminal-color14"));
+    parse_color(15,                yed_get_var("terminal-color15"));
+    parse_color(CDEFAULT,          yed_get_var("terminal-color-default"));
+    parse_color(CDEFAULT_INACTIVE, yed_get_var("terminal-color-default-inactive"));
 }
 
 static void style(yed_event *event) {
@@ -2644,30 +2653,31 @@ int yed_plugin_boot(yed_plugin *self) {
         { style,     { EVENT_STYLE_CHANGE                                   } }};
 
     std::map<const char*, const char*> vars = {
-        { "terminal-debug-log",        "OFF"                        },
-        { "terminal-shell",            get_shell()                  },
-        { "terminal-termvar",          get_termvar()                },
-        { "terminal-scrollback",       XSTR(DEFAULT_SCROLLBACK)     },
-        { "terminal-max-block-size",   XSTR(DEFAULT_MAX_BLOCK_SIZE) },
-        { "terminal-auto-term-mode",   "ON"                         },
-        { "terminal-show-welcome",     "yes"                        },
-        { "terminal-color0",           "&black"                     },
-        { "terminal-color1",           "&red"                       },
-        { "terminal-color2",           "&green"                     },
-        { "terminal-color3",           "&yellow"                    },
-        { "terminal-color4",           "&blue"                      },
-        { "terminal-color5",           "&magenta"                   },
-        { "terminal-color6",           "&cyan"                      },
-        { "terminal-color7",           "&gray"                      },
-        { "terminal-color8",           "&gray"                      },
-        { "terminal-color9",           "&red"                       },
-        { "terminal-color10",          "&green"                     },
-        { "terminal-color11",          "&yellow"                    },
-        { "terminal-color12",          "&blue"                      },
-        { "terminal-color13",          "&magenta"                   },
-        { "terminal-color14",          "&cyan"                      },
-        { "terminal-color15",          "&white"                     },
-        { "terminal-color-default",    "&active"                    }};
+        { "terminal-debug-log",              "OFF"                        },
+        { "terminal-shell",                  get_shell()                  },
+        { "terminal-termvar",                get_termvar()                },
+        { "terminal-scrollback",             XSTR(DEFAULT_SCROLLBACK)     },
+        { "terminal-max-block-size",         XSTR(DEFAULT_MAX_BLOCK_SIZE) },
+        { "terminal-auto-term-mode",         "ON"                         },
+        { "terminal-show-welcome",           "yes"                        },
+        { "terminal-color0",                 "&black"                     },
+        { "terminal-color1",                 "&red"                       },
+        { "terminal-color2",                 "&green"                     },
+        { "terminal-color3",                 "&yellow"                    },
+        { "terminal-color4",                 "&blue"                      },
+        { "terminal-color5",                 "&magenta"                   },
+        { "terminal-color6",                 "&cyan"                      },
+        { "terminal-color7",                 "&gray"                      },
+        { "terminal-color8",                 "&gray"                      },
+        { "terminal-color9",                 "&red"                       },
+        { "terminal-color10",                "&green"                     },
+        { "terminal-color11",                "&yellow"                    },
+        { "terminal-color12",                "&blue"                      },
+        { "terminal-color13",                "&magenta"                   },
+        { "terminal-color14",                "&cyan"                      },
+        { "terminal-color15",                "&white"                     },
+        { "terminal-color-default",          "&active"                    },
+        { "terminal-color-default-inactive", "&inactive"                  }};
 
     std::map<const char*, void(*)(int, char**)> cmds = {
         { "term-new",           term_new_cmd           },
