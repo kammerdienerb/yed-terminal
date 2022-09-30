@@ -434,6 +434,17 @@ struct Screen {
         this->set(this->cursor_row, this->cursor_col, g);
     }
 
+    void insert(int row, int col, yed_glyph g) {
+        Cell new_cell;
+
+        new_cell.glyph = g;
+        new_cell.attrs = this->attrs;
+
+        auto &line = (*this)[this->scrollback + row - 1];
+        line.insert(line.begin() + col - 1, new_cell);
+        line.pop_back();
+    }
+
     void del_cell(int row, int col) {
         auto &line = (*this)[this->scrollback + row - 1];
         line.erase(line.begin() + col - 1);
@@ -904,6 +915,10 @@ TERM_CYAN
         this->clear_page();
     }
 
+    void insert_cell(int row, int col, yed_glyph g) {
+        this->screen().insert(row, col, g);
+    }
+
     void set_cell(int row, int col, yed_glyph g) {
         this->screen().set(row, col, g);
     }
@@ -954,13 +969,17 @@ do {                                      \
          */
 
         switch (ENC(csi.command, csi.mode)) {
-            case '@':
+            case '@': {
                 val = csi.args.size() ? csi.args[0] : 1;
+
+                auto save = this->current_attrs;
+                this->current_attrs = ZERO_ATTR;
                 for (int i = 0; i < val; i += 1) {
-                    this->move_cursor(0, 1);
-                    this->set_current_cell(G(' '));
+                    this->insert_cell(this->row(), this->col(), G(' '));
                 }
+                this->current_attrs = save;
                 break;
+            }
             case 'A':
                 val = csi.args.size() ? csi.args[0] : 1;
                 this->move_cursor(-val, 0);
