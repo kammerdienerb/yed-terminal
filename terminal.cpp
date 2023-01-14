@@ -2482,7 +2482,6 @@ static void term_feed_keys_cmd(int n_args, char **args) {
 
 static void term_feed_text_cmd(int n_args, char **args) {
     yed_buffer *buffer;
-    int         last_was_backslash;
     int         key;
 
     if (n_args != 2) {
@@ -2497,22 +2496,12 @@ static void term_feed_text_cmd(int n_args, char **args) {
     }
 
     if (auto t = term_for_buffer(buffer)) {
-        last_was_backslash = 0;
         for (int i = 0; i < strlen(args[1]); i += 1) {
             key = args[1][i];
 
-            if (last_was_backslash) {
-                last_was_backslash = 0;
-                switch (key) {
-                    case 'n':  key = ENTER; break;
-                    case 't':  key = TAB;   break;
-                    case '\\':              break;
-                    default:
-                        continue;
-                }
-            } else if (key == '\\') {
-                last_was_backslash = 1;
-                continue;
+            switch (key) {
+                case '\n':  key = ENTER; break;
+                case '\t':  key = TAB;   break;
             }
 
             t->keys(1, &key);
