@@ -333,10 +333,12 @@ struct Line : std::vector<Cell> {
     int dirty = 0;
 
     void clear_cells(int width, yed_attrs attrs) {
-        this->resize(width);
-        for (auto &cell : *this) {
-            cell.glyph = G(0);
-            cell.attrs = attrs;
+        int prev_width = this->size();
+
+        this->resize(width, { G(0), attrs });
+
+        for (int i = 0; i < prev_width; i += 1) {
+            (*this)[i] = { G(0), attrs };
         }
     }
 
@@ -557,14 +559,21 @@ struct Screen {
     }
 
     void set_dimensions(int width, int height, yed_buffer *buffer) {
-        int num_lines;
         int max_width;
+        int num_lines;
+
+        max_width = width;
+        for (auto linep : this->lines) {
+            if (linep->size() > max_width) {
+                max_width = linep->size();
+            }
+        }
 
         num_lines = height + this->scrollback;
 
         if (num_lines > this->lines.size()) {
             while (this->lines.size() < num_lines) {
-                this->lines.push_back(new Line(width, this->attrs));
+                this->lines.push_back(new Line(max_width, this->attrs));
             }
         } else {
             while (this->lines.size() > num_lines) {
@@ -579,22 +588,11 @@ struct Screen {
             }
         }
 
-        max_width = width;
-        for (auto linep : this->lines) {
-            if (linep->size() > max_width) {
-                max_width = linep->size();
-            }
-        }
-
         if (max_width > this->width) {
             for (auto linep : this->lines) {
                 auto &line = *linep;
-                line.resize(max_width);
-                for (int i = this->width; i < max_width; i += 1) {
-                    auto &cell = line[i];
-                    cell.glyph = G(0);
-                    cell.attrs = this->attrs;
-                }
+
+                line.resize(max_width, { G(0), this->attrs });
             }
         }
 
