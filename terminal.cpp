@@ -1004,6 +1004,16 @@ do {                                      \
                 val = csi.args.size() ? csi.args[0] : 1;
                 this->move_cursor(0, -val);
                 break;
+            case 'E':
+                val = csi.args.size() ? csi.args[0] : 1;
+                this->move_cursor(val, 0);
+                this->set_cursor(this->row(), 1);
+                break;
+            case 'F':
+                val = csi.args.size() ? csi.args[0] : 1;
+                this->move_cursor(-val, 0);
+                this->set_cursor(this->row(), 1);
+                break;
             case 'd':
                 val = csi.args.size() ? csi.args[0] : 1;
                 this->set_cursor(val, this->col());
