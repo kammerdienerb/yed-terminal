@@ -105,6 +105,7 @@ do {                                                               \
 #define DEFAULT_TERMVAR          "xterm-256color"
 #define DEFAULT_SCROLLBACK       10000
 #define DEFAULT_MAX_BLOCK_SIZE   16384
+#define DEFAULT_READ_CHUNK_SIZE  1024
 
 const char *get_shell() {
     const char *shell;
@@ -647,28 +648,29 @@ struct Screen {
 
 
 struct Term {
-    int                valid          = 0;
-    int                master_fd      = 0;
-    int                slave_fd       = 0;
-    int                sig_fds[2]     = { 0, 0 };
-    pid_t              shell_pid      = 0;
-    int                process_exited = 0;
-    int                bad_shell      = 0;
+    int                valid           = 0;
+    int                master_fd       = 0;
+    int                slave_fd        = 0;
+    int                sig_fds[2]      = { 0, 0 };
+    pid_t              shell_pid       = 0;
+    int                process_exited  = 0;
+    int                bad_shell       = 0;
     std::thread        thr;
     std::mutex         buff_lock;
     std::vector<char>  data_buff;
-    int                delay_update   = 0;
-    int                update_waiting = 0;
-    yed_buffer        *buffer         = NULL;
-    yed_attrs          current_attrs  = ZERO_ATTR;
+    int                read_chunk_size = 0;
+    int                delay_update    = 0;
+    int                update_waiting  = 0;
+    yed_buffer        *buffer          = NULL;
+    yed_attrs          current_attrs   = ZERO_ATTR;
     Screen             main_screen;
     Screen             alt_screen;
-    Screen            *_screen        = NULL;
-    int                app_keys       = 0;
-    int                auto_wrap      = 1;
-    int                wrap_next      = 0;
+    Screen            *_screen         = NULL;
+    int                app_keys        = 0;
+    int                auto_wrap       = 1;
+    int                wrap_next       = 0;
     std::string        title;
-    int                term_mode      = 1;
+    int                term_mode       = 1;
 
     static void read_thread(Term *term) {
         struct pollfd pfds[2];
@@ -704,19 +706,18 @@ struct Term {
             int force_update = 0;
 
             { std::lock_guard<std::mutex> lock(term->buff_lock);
-                #define BUFF_SZ (4*4096)
                 auto s  = term->data_buff.size();
 
                 /* If the main thread has emptied the buffer, we need
                  * to force a new update for this new data. */
                 force_update = s == 0;
 
-                term->data_buff.resize(s + BUFF_SZ);
-                char *p = &(term->data_buff[term->data_buff.size() - BUFF_SZ]);
+                term->data_buff.resize(s + term->read_chunk_size);
+                char *p = &(term->data_buff[term->data_buff.size() - term->read_chunk_size]);
 
-                while ((n = read(term->master_fd, p, BUFF_SZ)) > 0) {
-                    term->data_buff.resize(((p + n) - term->data_buff.data()) + BUFF_SZ);
-                    p = &(term->data_buff[term->data_buff.size() - BUFF_SZ]);
+                while ((n = read(term->master_fd, p, term->read_chunk_size)) > 0) {
+                    term->data_buff.resize(((p + n) - term->data_buff.data()) + term->read_chunk_size);
+                    p = &(term->data_buff[term->data_buff.size() - term->read_chunk_size]);
 
                     if (term->data_buff.size() > max) {
                         force_update = 1;
@@ -850,6 +851,10 @@ TERM_CYAN
 
             this->resize(DEFAULT_WIDTH, DEFAULT_HEIGHT);
             this->set_cursor(1, 1);
+
+            if (!yed_get_var_as_int("terminal-read-chunk-size", &this->read_chunk_size)) {
+                this->read_chunk_size = DEFAULT_READ_CHUNK_SIZE;
+            }
 
             thr = std::thread(Term::read_thread, this);
 
@@ -2674,31 +2679,32 @@ int yed_plugin_boot(yed_plugin *self) {
         { style,     { EVENT_STYLE_CHANGE                                   } }};
 
     std::map<const char*, const char*> vars = {
-        { "terminal-debug-log",              "OFF"                        },
-        { "terminal-shell",                  get_shell()                  },
-        { "terminal-termvar",                get_termvar()                },
-        { "terminal-scrollback",             XSTR(DEFAULT_SCROLLBACK)     },
-        { "terminal-max-block-size",         XSTR(DEFAULT_MAX_BLOCK_SIZE) },
-        { "terminal-auto-term-mode",         "ON"                         },
-        { "terminal-show-welcome",           "yes"                        },
-        { "terminal-color0",                 "&black"                     },
-        { "terminal-color1",                 "&red"                       },
-        { "terminal-color2",                 "&green"                     },
-        { "terminal-color3",                 "&yellow"                    },
-        { "terminal-color4",                 "&blue"                      },
-        { "terminal-color5",                 "&magenta"                   },
-        { "terminal-color6",                 "&cyan"                      },
-        { "terminal-color7",                 "&gray"                      },
-        { "terminal-color8",                 "&gray"                      },
-        { "terminal-color9",                 "&red"                       },
-        { "terminal-color10",                "&green"                     },
-        { "terminal-color11",                "&yellow"                    },
-        { "terminal-color12",                "&blue"                      },
-        { "terminal-color13",                "&magenta"                   },
-        { "terminal-color14",                "&cyan"                      },
-        { "terminal-color15",                "&white"                     },
-        { "terminal-color-default",          "&active"                    },
-        { "terminal-color-default-inactive", "&inactive"                  }};
+        { "terminal-debug-log",              "OFF"                         },
+        { "terminal-shell",                  get_shell()                   },
+        { "terminal-termvar",                get_termvar()                 },
+        { "terminal-scrollback",             XSTR(DEFAULT_SCROLLBACK)      },
+        { "terminal-max-block-size",         XSTR(DEFAULT_MAX_BLOCK_SIZE)  },
+        { "terminal-read-chunk-size",        XSTR(DEFAULT_READ_CHUNK_SIZE) },
+        { "terminal-auto-term-mode",         "ON"                          },
+        { "terminal-show-welcome",           "yes"                         },
+        { "terminal-color0",                 "&black"                      },
+        { "terminal-color1",                 "&red"                        },
+        { "terminal-color2",                 "&green"                      },
+        { "terminal-color3",                 "&yellow"                     },
+        { "terminal-color4",                 "&blue"                       },
+        { "terminal-color5",                 "&magenta"                    },
+        { "terminal-color6",                 "&cyan"                       },
+        { "terminal-color7",                 "&gray"                       },
+        { "terminal-color8",                 "&gray"                       },
+        { "terminal-color9",                 "&red"                        },
+        { "terminal-color10",                "&green"                      },
+        { "terminal-color11",                "&yellow"                     },
+        { "terminal-color12",                "&blue"                       },
+        { "terminal-color13",                "&magenta"                    },
+        { "terminal-color14",                "&cyan"                       },
+        { "terminal-color15",                "&white"                      },
+        { "terminal-color-default",          "&active"                     },
+        { "terminal-color-default-inactive", "&inactive"                   }};
 
     std::map<const char*, void(*)(int, char**)> cmds = {
         { "term-new",           term_new_cmd           },
