@@ -148,6 +148,16 @@ int get_max_block_size() {
     return max;
 }
 
+int get_read_chunk_size() {
+    int size;
+
+    if (!yed_get_var_as_int("terminal-read-chunk-size", &size)) {
+        size = DEFAULT_READ_CHUNK_SIZE;
+    }
+
+    return size;
+}
+
 #define N_COLORS (18)
 static yed_attrs colors[N_COLORS];
 
@@ -658,6 +668,7 @@ struct Term {
     std::thread        thr;
     std::mutex         buff_lock;
     std::vector<char>  data_buff;
+    int                max_block_size  = 0;
     int                read_chunk_size = 0;
     int                delay_update    = 0;
     int                update_waiting  = 0;
@@ -702,7 +713,7 @@ struct Term {
             /* The main thread has signaled us to stop. */
             if (pfds[1].revents & POLLIN) { return; }
 
-            int max          = get_max_block_size();
+            int max          = term->max_block_size;
             int force_update = 0;
 
             { std::lock_guard<std::mutex> lock(term->buff_lock);
@@ -852,9 +863,8 @@ TERM_CYAN
             this->resize(DEFAULT_WIDTH, DEFAULT_HEIGHT);
             this->set_cursor(1, 1);
 
-            if (!yed_get_var_as_int("terminal-read-chunk-size", &this->read_chunk_size)) {
-                this->read_chunk_size = DEFAULT_READ_CHUNK_SIZE;
-            }
+            this->max_block_size  = get_max_block_size();
+            this->read_chunk_size = get_read_chunk_size();
 
             thr = std::thread(Term::read_thread, this);
 
