@@ -704,7 +704,7 @@ struct Term {
             int force_update = 0;
 
             { std::lock_guard<std::mutex> lock(term->buff_lock);
-                #define BUFF_SZ (512)
+                #define BUFF_SZ (4*4096)
                 auto s  = term->data_buff.size();
 
                 /* If the main thread has emptied the buffer, we need
