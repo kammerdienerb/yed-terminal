@@ -1959,8 +1959,11 @@ next:;
         row   = event->row;
 
         for (int col = 1; col <= this->width(); col += 1) {
-            if (col > this->screen()[row - 1].size()) { break; }
-            yed_attrs attrs = this->screen()[row - 1][col - 1].attrs;
+            auto &line = this->screen()[row - 1];
+
+            if (col > line.size()) { break; }
+
+            yed_attrs attrs = line[col - 1].attrs;
 
             if (ATTR_FG_KIND(attrs.flags) == ATTR_KIND_16 && attrs.fg >= 30 && attrs.fg <= 37) {
                 int fg = attrs.fg - 30 + (!!(attrs.flags & ATTR_16_LIGHT_FG)) * 8;
