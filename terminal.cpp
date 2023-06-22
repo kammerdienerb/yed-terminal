@@ -634,12 +634,12 @@ struct Screen {
             if (line.dirty) {
                 int n = line.size();
 
+                yed_clear_line(&new_line);
+
                 for (; n >= 1; n -= 1) {
                     if (line[n - 1].glyph.c != 0
                     ||  line[n - 1].attrs.flags != 0) { break; }
                 }
-
-                yed_clear_line(&new_line);
 
                 for (int i = 0; i < n; i += 1) {
                     auto g = line[i].glyph.c ? line[i].glyph : G(' ');
