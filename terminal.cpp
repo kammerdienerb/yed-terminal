@@ -628,7 +628,8 @@ struct Screen {
         yed_line new_line = yed_new_line_with_cap(this->width);
 
         int row = 1;
-        for (int i = 0; i < this->lines.size(); i += 1) {
+        auto n_lines = this->lines.size();
+        for (int i = 0; i < n_lines; i += 1) {
             auto &line = (*this)[i];
             if (line.dirty) {
                 int n = line.size();
