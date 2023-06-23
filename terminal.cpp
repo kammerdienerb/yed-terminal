@@ -353,6 +353,15 @@ struct Line : std::vector<Cell> {
         }
     }
 
+    Line * new_by_donation(int width, yed_attrs attrs) {
+        Line *l = new Line(0, ZERO_ATTR);
+
+        *l = std::move(*this);
+        l->clear_cells(width, attrs);
+
+        return l;
+    }
+
     Line(int width, yed_attrs attrs) {
         this->clear_cells(width, attrs);
     }
@@ -479,11 +488,13 @@ struct Screen {
         int del_row = this->scroll_t ? this->scrollback + this->scroll_t : 1;
         int new_row = this->scrollback + this->scbottom();
 
+        auto new_line = this->lines[del_row - 1]->new_by_donation(this->width, this->attrs);
         this->_delete_line(del_row - 1);
+
         if (new_row > this->lines.size()) {
-            this->lines.push_back(new Line(this->width, this->attrs));
+            this->lines.push_back(new_line);
         } else {
-            this->lines.insert(this->lines.begin() + new_row - 1, new Line(this->width, this->attrs));
+            this->lines.insert(this->lines.begin() + new_row - 1, new_line);
         }
 
         { BUFF_WRITABLE_GUARD(buffer);
