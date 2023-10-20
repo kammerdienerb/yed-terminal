@@ -2386,6 +2386,7 @@ static void focus(yed_event *event) {
 
     if (from_term != to_term) {
         if (to_term) {
+            to_buff->has_selection = 0;
             set_term_keys();
         } else {
             restore_normal_keys();
