@@ -346,10 +346,10 @@ struct Line : std::vector<Cell> {
     void clear_cells(int width, yed_attrs attrs) {
         int prev_width = this->size();
 
-        this->resize(width, { G(0), attrs });
+        this->resize(width, { yed_glyph_copy(GLYPH("")), attrs });
 
         for (int i = 0; i < prev_width; i += 1) {
-            (*this)[i] = { G(0), attrs };
+            (*this)[i] = { yed_glyph_copy(GLYPH("")), attrs };
         }
     }
 
@@ -434,13 +434,13 @@ struct Screen {
     int sctop()    { return this->scroll_t ? this->scroll_t : 1;            }
     int scbottom() { return this->scroll_b ? this->scroll_b : this->height; }
 
-    void set(int row, int col, yed_glyph g) {
+    void set(int row, int col, yed_glyph *g) {
         if (row > this->height || col > this->width) { return; }
 
         auto &line = (*this)[this->scrollback + row - 1];
         auto &cell = line[col - 1];
 
-        cell.glyph = g;
+        cell.glyph = yed_glyph_copy(g);
 
         int width = yed_get_glyph_width(g);
         for (int i = 0; i < width; i += 1) {
@@ -452,14 +452,14 @@ struct Screen {
         line.dirty = 1;
     }
 
-    void set_current_cell(yed_glyph g) {
+    void set_current_cell(yed_glyph *g) {
         this->set(this->cursor_row, this->cursor_col, g);
     }
 
-    void insert(int row, int col, yed_glyph g) {
+    void insert(int row, int col, yed_glyph *g) {
         Cell new_cell;
 
-        new_cell.glyph = g;
+        new_cell.glyph = yed_glyph_copy(g);
         new_cell.attrs = this->attrs;
 
         auto &line = (*this)[this->scrollback + row - 1];
@@ -470,7 +470,7 @@ struct Screen {
     void del_cell(int row, int col) {
         auto &line = (*this)[this->scrollback + row - 1];
         line.erase(line.begin() + col - 1);
-        line.push_back({ G(0), this->attrs });
+        line.push_back({ yed_glyph_copy(GLYPH("")), this->attrs });
         line.dirty = 1;
     }
 
@@ -614,7 +614,7 @@ struct Screen {
             for (auto linep : this->lines) {
                 auto &line = *linep;
 
-                line.resize(max_width, { G(0), this->attrs });
+                line.resize(max_width, { yed_glyph_copy(GLYPH("")), this->attrs });
             }
         }
 
@@ -653,8 +653,8 @@ struct Screen {
                 }
 
                 for (int i = 0; i < n; i += 1) {
-                    auto g = line[i].glyph.c ? line[i].glyph : G(' ');
-                    yed_line_append_glyph(&new_line, g);
+                    auto g = line[i].glyph.c ? line[i].glyph : yed_glyph_copy(GLYPH(" "));
+                    yed_line_append_glyph(&new_line, &g);
                 }
 
                 yed_buff_set_line_no_undo(buffer, row, &new_line);
@@ -940,15 +940,15 @@ TERM_CYAN
         this->clear_page();
     }
 
-    void insert_cell(int row, int col, yed_glyph g) {
+    void insert_cell(int row, int col, yed_glyph *g) {
         this->screen().insert(row, col, g);
     }
 
-    void set_cell(int row, int col, yed_glyph g) {
+    void set_cell(int row, int col, yed_glyph *g) {
         this->screen().set(row, col, g);
     }
 
-    void set_current_cell(yed_glyph g) {
+    void set_current_cell(yed_glyph *g) {
         this->screen().set_current_cell(g);
     }
 
@@ -1000,7 +1000,7 @@ do {                                      \
                 auto save = this->current_attrs;
                 this->current_attrs = ZERO_ATTR;
                 for (int i = 0; i < val; i += 1) {
-                    this->insert_cell(this->row(), this->col(), G(' '));
+                    this->insert_cell(this->row(), this->col(), GLYPH(" "));
                 }
                 this->current_attrs = save;
                 break;
@@ -1072,7 +1072,7 @@ do {                                      \
                             this->clear_row(row);
                         }
                         for (int col = this->width(); col >= this->col(); col -= 1) {
-                            this->set_cell(this->row(), col, G(0));
+                            this->set_cell(this->row(), col, GLYPH(""));
                         }
                         break;
                     case 1:
@@ -1080,7 +1080,7 @@ do {                                      \
                             this->clear_row(row);
                         }
                         for (int col = 1; col >= this->col(); col += 1) {
-                            this->set_cell(this->row(), col, G(0));
+                            this->set_cell(this->row(), col, GLYPH(""));
                         }
                         break;
                     case 2:
@@ -1100,12 +1100,12 @@ do {                                      \
                     case 0:
                     K_missing:;
                         for (int col = this->width(); col >= this->col(); col -= 1) {
-                            this->set_cell(this->row(), col, G(0));
+                            this->set_cell(this->row(), col, GLYPH(""));
                         }
                         break;
                     case 1:
                         for (int col = 1; col <= this->col(); col += 1) {
-                            this->set_cell(this->row(), col, G(0));
+                            this->set_cell(this->row(), col, GLYPH(""));
                         }
                         break;
                     case 2:
@@ -1426,7 +1426,7 @@ do {                                      \
             case 'X':
                 val = csi.args.size() ? csi.args[0] : 1;
                 for (int i = 0; i < val; i += 1) {
-                    this->set_cell(this->row(), this->col() + i, G(0));
+                    this->set_cell(this->row(), this->col() + i, GLYPH(""));
                 }
                 break;
             default:
@@ -1525,7 +1525,7 @@ do {                                \
         char        *s             = buff.data();
         size_t       len           = buff.size() - 1;
         yed_glyph   *git           = NULL;
-        yed_glyph    last          = G(0);
+        yed_glyph    last          = yed_glyph_copy(GLYPH(""));
         int          csi_countdown = 0;
         char        *p             = NULL;
         char         c             = 0;
@@ -1542,7 +1542,7 @@ do {                                \
                 p = &git->c;
                 c = *p;
 
-                if (yed_get_glyph_len(*git) > 1) { goto put_utf8; }
+                if (yed_get_glyph_len(git) > 1) { goto put_utf8; }
 
                 if (dectst) {
                     switch (c) {
@@ -1550,7 +1550,7 @@ do {                                \
                             this->reset();
                             for (int row = 1; row <= this->height(); row += 1) {
                                 for (int col = this->width(); col >= this->col(); col -= 1) {
-                                    this->set_cell(row, col, G('E'));
+                                    this->set_cell(row, col, GLYPH("E"));
                                 }
                             }
                             break;
@@ -1753,7 +1753,7 @@ dbg_out:;
                         do {
                             if (this->col() == this->width()) { break; }
 
-                            this->set_current_cell(G(' '));
+                            this->set_current_cell(GLYPH(" "));
                             this->move_cursor(0, 1);
                         } while (this->col() % yed_get_tab_width() != 1);
                         break;
@@ -1767,7 +1767,7 @@ dbg_out:;
                     put:;
                         if (iscntrl(git->c)) { goto next; }
                     put_utf8:;
-                        int len = yed_get_glyph_len(*git);
+                        int len = yed_get_glyph_len(git);
                         if (len > 1) {
                             if (p + len >= &buff.back()) {
                                 for (int i = 0; i < len; i += 1) {
@@ -1795,11 +1795,11 @@ dbg_out:;
                             this->wrap_next = 0;
                         }
 
-                        this->set_current_cell(*git);
+                        this->set_current_cell(git);
                         if (this->col() == this->width() && this->auto_wrap) {
                             this->wrap_next = 1;
                         } else {
-                            this->move_cursor(0, yed_get_glyph_width(*git), /* cancel_wrap = */ 0);
+                            this->move_cursor(0, yed_get_glyph_width(git), /* cancel_wrap = */ 0);
                         }
                         break;
                 }
