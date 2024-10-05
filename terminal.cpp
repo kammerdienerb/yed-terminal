@@ -1804,7 +1804,7 @@ dbg_out:;
                         break;
                 }
 next:;
-                last = *git;
+                last = yed_glyph_copy(git);
             }
         }
 
