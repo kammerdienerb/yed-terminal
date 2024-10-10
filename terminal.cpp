@@ -602,7 +602,7 @@ struct Screen {
                 auto linep = this->lines.back();
                 auto &line = *linep;
 
-                if (line[0].glyph.data == 0) {
+                if (line[0].glyph.c == 0) {
                     this->_delete_line(this->lines.size() - 1);
                 } else {
                     this->_delete_line(0);
@@ -793,7 +793,7 @@ struct Term {
                 auto linep = this->screen().lines.back();
                 auto &line = *linep;
 
-                if (line[0].glyph.data == 0) {
+                if (line[0].glyph.c == 0) {
                     yed_buff_delete_line_no_undo(this->buffer, yed_buff_n_lines(this->buffer));
                 } else {
                     yed_buff_delete_line_no_undo(this->buffer, 1);
