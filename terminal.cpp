@@ -346,11 +346,11 @@ struct Line : std::vector<Cell> {
     void clear_cells(int width, yed_attrs attrs) {
         int prev_width = this->size();
 
-        this->resize(width, { yed_glyph_copy(GLYPH("")), attrs });
-
-        for (int i = 0; i < MIN(prev_width, width); i += 1) {
+        for (int i = 0; i < prev_width; i += 1) {
             (*this)[i] = { yed_glyph_copy(GLYPH("")), attrs };
         }
+
+        this->resize(width, { yed_glyph_copy(GLYPH("")), attrs });
     }
 
     Line * new_by_donation(int width, yed_attrs attrs) {
