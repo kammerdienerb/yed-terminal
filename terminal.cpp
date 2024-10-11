@@ -653,8 +653,7 @@ struct Screen {
                 }
 
                 for (int i = 0; i < n; i += 1) {
-                    auto g = line[i].glyph.c ? line[i].glyph : yed_glyph_copy(GLYPH(" "));
-                    yed_line_append_glyph(&new_line, &g);
+                    yed_line_append_glyph(&new_line, line[i].glyph.c ? &(line[i].glyph) : GLYPH(" "));
                 }
 
                 yed_buff_set_line_no_undo(buffer, row, &new_line);
