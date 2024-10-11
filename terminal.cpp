@@ -348,7 +348,7 @@ struct Line : std::vector<Cell> {
 
         this->resize(width, { yed_glyph_copy(GLYPH("")), attrs });
 
-        for (int i = 0; i < prev_width; i += 1) {
+        for (int i = 0; i < MIN(prev_width, width); i += 1) {
             (*this)[i] = { yed_glyph_copy(GLYPH("")), attrs };
         }
     }
