@@ -1528,6 +1528,7 @@ do {                                \
         int          csi_countdown = 0;
         char        *p             = NULL;
         char         c             = 0;
+        int          glyph_len     = 0;
 
         { BUFF_WRITABLE_GUARD(this->buffer);
             yed_glyph_traverse_n(s, len, git) {
@@ -1538,10 +1539,11 @@ do {                                \
 
 /*                 ASSERT(incomplete_csi.size() == 0, "incomplete in middle of stream"); */
 
-                p = &git->c;
-                c = *p;
+                p         = &git->c;
+                c         = *p;
+                glyph_len = yed_get_glyph_len(git);
 
-                if (yed_get_glyph_len(git) > 1) { goto put_utf8; }
+                if (glyph_len > 1) { goto put_utf8; }
 
                 if (dectst) {
                     switch (c) {
@@ -1766,20 +1768,17 @@ dbg_out:;
                     put:;
                         if (iscntrl(git->c)) { goto next; }
                     put_utf8:;
-                        int len = yed_get_glyph_len(git);
-                        if (len > 1) {
-                            if (p + len >= &buff.back()) {
-                                for (int i = 0; i < len; i += 1) {
-                                    incomplete_utf8.push_back(p[i]);
-                                }
-                                goto next;
-                            }
-
-                            if (do_log) {
-                                for (int i = 0; i < len; i += 1) {
+                        if (p + glyph_len > &buff.back()) {
+                            for (int i = 0; p + i < &buff.back(); i += 1) {
+                                if (do_log) {
                                     debug += git->bytes[i];
                                 }
+
+                                incomplete_utf8.push_back(p[i]);
                             }
+
+                            /* Can't goto next because we might try to copy an incomplete glyph. */
+                            goto out;
                         }
 
                         if (this->wrap_next) {
@@ -1805,6 +1804,7 @@ dbg_out:;
 next:;
                 last = yed_glyph_copy(git);
             }
+out:;
         }
 
         this->write_to_buffer();
