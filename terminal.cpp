@@ -689,6 +689,7 @@ struct Term {
     Screen             alt_screen;
     Screen            *_screen         = NULL;
     int                app_keys        = 0;
+    char               charset         = 'B';
     int                auto_wrap       = 1;
     int                wrap_next       = 0;
     std::string        title;
@@ -1559,7 +1560,12 @@ do {                                \
                     dectst = 0;
                     goto next;
                 } else if (setcharset) {
-                    /* Ignore character set setting. */
+                    if (c != 'B' && c != '0') {
+                        DBG("UNHANDLED charset %c", c);
+                        this->charset = 'B';
+                    } else {
+                        this->charset = c;
+                    }
                     setcharset = 0;
                     goto next;
                 }
@@ -1793,11 +1799,42 @@ dbg_out:;
                             this->wrap_next = 0;
                         }
 
-                        this->set_current_cell(git);
+                        yed_glyph drawg = yed_glyph_copy(git);
+                        if (G_IS_ASCII(git) && this->charset == '0') {
+                            switch (git->c) {
+                                case '`': drawg = yed_glyph_copy(GLYPH("◆")); break;
+                                case '0': drawg = yed_glyph_copy(GLYPH("█")); break;
+                                case 'a': drawg = yed_glyph_copy(GLYPH("▒")); break;
+                                case 'f': drawg = yed_glyph_copy(GLYPH("°")); break;
+                                case 'g': drawg = yed_glyph_copy(GLYPH("±")); break;
+                                case 'i': drawg = yed_glyph_copy(GLYPH("␋")); break;
+                                case 'j': drawg = yed_glyph_copy(GLYPH("┘")); break;
+                                case 'k': drawg = yed_glyph_copy(GLYPH("┐")); break;
+                                case 'l': drawg = yed_glyph_copy(GLYPH("┌")); break;
+                                case 'm': drawg = yed_glyph_copy(GLYPH("└")); break;
+                                case 'n': drawg = yed_glyph_copy(GLYPH("┼")); break;
+                                case 'o': drawg = yed_glyph_copy(GLYPH("⎺")); break;
+                                case 'p': drawg = yed_glyph_copy(GLYPH("⎻")); break;
+                                case 'q': drawg = yed_glyph_copy(GLYPH("─")); break;
+                                case 'r': drawg = yed_glyph_copy(GLYPH("⎼")); break;
+                                case 's': drawg = yed_glyph_copy(GLYPH("⎽")); break;
+                                case 't': drawg = yed_glyph_copy(GLYPH("├")); break;
+                                case 'u': drawg = yed_glyph_copy(GLYPH("┤")); break;
+                                case 'v': drawg = yed_glyph_copy(GLYPH("┴")); break;
+                                case 'w': drawg = yed_glyph_copy(GLYPH("┬")); break;
+                                case 'x': drawg = yed_glyph_copy(GLYPH("│")); break;
+                                case '{': drawg = yed_glyph_copy(GLYPH("π")); break;
+                                case '}': drawg = yed_glyph_copy(GLYPH("£")); break;
+                                case '~': drawg = yed_glyph_copy(GLYPH("·")); break;
+                            }
+                        }
+
+                        this->set_current_cell(&drawg);
+
                         if (this->col() == this->width() && this->auto_wrap) {
                             this->wrap_next = 1;
                         } else {
-                            this->move_cursor(0, yed_get_glyph_width(git), /* cancel_wrap = */ 0);
+                            this->move_cursor(0, yed_get_glyph_width(&drawg), /* cancel_wrap = */ 0);
                         }
                         break;
                 }
