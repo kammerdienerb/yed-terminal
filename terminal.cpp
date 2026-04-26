@@ -2108,7 +2108,7 @@ static void uninstall_bindings() {
     yed_disable_key_map("terminal");
 
     for (auto &b : state->bindings) {
-        yed_unbind_key(b.key);
+        yed_map_unbind_key("terminal", b.key);
         if (b.len > 1) {
             yed_delete_key_sequence(b.key);
         }
