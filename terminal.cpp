@@ -164,9 +164,11 @@ static yed_attrs colors[N_COLORS];
 #define CDEFAULT          (N_COLORS - 2)
 #define CDEFAULT_INACTIVE (N_COLORS - 1)
 
-#define MODE_RESET ('!')
-#define MODE_PRIV  ('?')
-#define MODE_XTERM ('>')
+#define MODE_RESET      ('!')
+#define MODE_PRIV_DEC   ('?')
+#define MODE_PRIV_XTERM ('>')
+#define MODE_PRIV_LT    ('<')
+#define MODE_PRIV_EQ    ('=')
 
 struct CSI {
     std::vector<long> args;
@@ -192,15 +194,17 @@ do {                      \
     this->len += 1;       \
 } while (0)
 
-#define IS_DELIM(_c) ((_c) == ';' || (_c) == ':' || (_c) == '?' || (_c) == ' ' || (_c) == '>' || (c) == '!' || (c) == '%')
+#define IS_DELIM(_c) ((_c) == ';' || (_c) == ':' || (_c) == '?' || (_c) == ' ' || (_c) == '>' || (_c) == '<' || (_c) == '=' || (_c) == '!' || (_c) == '%')
 #define IS_FINAL(_c) ((_c) >= 0x40 && (_c) <= 0x7E)
 
         while (IS_DELIM(c)) {
             switch (c) {
-                case '!': this->mode = MODE_RESET; break;
-                case '?': this->mode = MODE_PRIV;  break;
-                case '>': this->mode = MODE_XTERM; break;
-                case ';': this->args.push_back(0); break;
+                case '!': this->mode = MODE_RESET;      break;
+                case '?': this->mode = MODE_PRIV_DEC;   break;
+                case '>': this->mode = MODE_PRIV_XTERM; break;
+                case '<': this->mode = MODE_PRIV_LT;    break;
+                case '=': this->mode = MODE_PRIV_EQ;    break;
+                case ';': this->args.push_back(0);      break;
             }
             NEXT();
         }
@@ -977,8 +981,8 @@ TERM_CYAN
 
 #define ENC(_cmd, _mode) ((_cmd) | ((_mode) << 24))
 #define RESET(_cmd)      ENC((_cmd), MODE_RESET)
-#define PRIV(_cmd)       ENC((_cmd), MODE_PRIV)
-#define XTERM(_cmd)      ENC((_cmd), MODE_XTERM)
+#define PRIV_DEC(_cmd)   ENC((_cmd), MODE_PRIV_DEC)
+#define PRIV_XTERM(_cmd) ENC((_cmd), MODE_PRIV_XTERM)
 
 #define SHIFT()                           \
 do {                                      \
@@ -1018,7 +1022,7 @@ do {                                      \
                 write(this->master_fd, id, strlen(id));
                 break;
             }
-            case XTERM('c'): { /* Send device attributes. */
+            case PRIV_XTERM('c'): { /* Send device attributes. */
                 const char *id = "\e[>0;0;0c";
                 write(this->master_fd, id, strlen(id));
                 break;
@@ -1150,7 +1154,7 @@ do {                                      \
                         break;
                 }
                 break;
-            case PRIV('h'):
+            case PRIV_DEC('h'):
                 /* DEC Private modes enable. */
                 val = csi.args.size() ? csi.args[0] : 1;
                 switch (val) {
@@ -1181,7 +1185,7 @@ do {                                      \
                         break;
                 }
                 break;
-            case PRIV('l'):
+            case PRIV_DEC('l'):
                 /* DEC Private modes disable. */
                 val = csi.args.size() ? csi.args[0] : 1;
                 switch (val) {
@@ -1208,6 +1212,11 @@ do {                                      \
                     default:;
                         goto unhandled;
                         break;
+                }
+                break;
+            case PRIV_DEC('u'):
+                if (csi.args.size() == 0) {
+
                 }
                 break;
             case 'm':
@@ -1350,7 +1359,7 @@ do {                                      \
                     }
                 }
                 break;
-            case XTERM('m'):
+            case PRIV_XTERM('m'):
                 /* Ignore xterm key modifier options. */
                 break;
             case 'n':
@@ -1420,7 +1429,7 @@ do {                                      \
                         break;
                 }
                 break;
-            case XTERM('t'):
+            case PRIV_XTERM('t'):
                 /* Ignore xterm title mode controls. */
                 break;
             case 'X':
@@ -1600,11 +1609,16 @@ do {                                \
                                     for (int i = 0; i < csi.len; i += 1) {
                                         incomplete_csi += *(p + 1 + i);
                                     }
+                                    csi_countdown = incomplete_csi.size();
                                 } else {
-                                    DBG("WARN: invalid/incomplete CSI: '\\e[%.*s'", csi.len, p + 1);
+                                    int skip = csi.len;
+                                    while (*(p + 1 + skip) && (*(p + 1 + skip) < 0x40 || *(p + 1 + skip) > 0x7E)) {
+                                        skip += 1;
+                                    }
+                                    if (*(p + 1 + skip)) { skip += 1; }
+                                    DBG("WARN: invalid CSI: '\\e[%.*s'", skip, p + 1);
+                                    csi_countdown = skip;
                                 }
-
-                                csi_countdown = incomplete_csi.size();
                             }
 
                             break;
