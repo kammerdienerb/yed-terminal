@@ -106,6 +106,7 @@ do {                                                               \
 #define DEFAULT_SCROLLBACK       10000
 #define DEFAULT_MAX_BLOCK_SIZE   16384
 #define DEFAULT_READ_CHUNK_SIZE  1024
+#define DEFAULT_TAB_WIDTH        8
 
 const char *get_shell() {
     const char *shell;
@@ -156,6 +157,16 @@ int get_read_chunk_size() {
     }
 
     return size;
+}
+
+int get_tab_width() {
+    int width;
+
+    if (!yed_get_var_as_int("terminal-tab-width", &width) || width <= 0) {
+        width = DEFAULT_TAB_WIDTH;
+    }
+
+    return width;
 }
 
 #define N_COLORS (18)
@@ -273,6 +284,9 @@ do {                      \
 
         if (c != ';' && c != CTRL_G) { goto out; }
 
+        /* Drop the separator so that 'arg' is just the payload. */
+        if (c == ';') { NEXT(); }
+
         while (c && c != CTRL_G && c != '\e') {
             if (c == '\e') {
                 NEXT();
@@ -387,6 +401,7 @@ struct Screen {
     int                scroll_t        = 0;
     int                scroll_b        = 0;
     int                scrollback      = get_scrollback();
+    int                padded_line     = -1;
     yed_attrs         &attrs;
 
     Screen(yed_attrs &_attrs) : attrs(_attrs) { }
@@ -642,16 +657,29 @@ struct Screen {
 
         yed_line new_line = yed_new_line_with_cap(this->width);
 
+        int cursor_line = this->scrollback + this->cursor_row - 1;
+        int n_lines     = this->lines.size();
+
+        if (cursor_line >= 0 && cursor_line < n_lines) {
+            (*this)[cursor_line].dirty = 1;
+        }
+        if (this->padded_line != cursor_line
+        &&  this->padded_line >= 0
+        &&  this->padded_line < n_lines) {
+            (*this)[this->padded_line].dirty = 1;
+        }
+        this->padded_line = cursor_line;
+
         int row = 1;
-        auto n_lines = this->lines.size();
         for (int i = 0; i < n_lines; i += 1) {
             auto &line = (*this)[i];
             if (line.dirty) {
-                int n = line.size();
+                int n   = line.size();
+                int min = i == cursor_line ? MIN(this->cursor_col - 1, n) : 0;
 
                 yed_clear_line(&new_line);
 
-                for (; n >= 1; n -= 1) {
+                for (; n > min; n -= 1) {
                     if (line[n - 1].glyph.c != 0
                     ||  line[n - 1].attrs.flags != 0) { break; }
                 }
@@ -696,8 +724,8 @@ struct Term {
     char               charset         = 'B';
     int                auto_wrap       = 1;
     int                wrap_next       = 0;
-    std::string        title;
     int                term_mode       = 1;
+    std::vector<char>  tab_stops;
 
     static void read_thread(Term *term) {
         struct pollfd pfds[2];
@@ -807,6 +835,8 @@ struct Term {
 
         this->main_screen.set_dimensions(width, height, this->buffer);
         this->alt_screen.set_dimensions(width, height, this->buffer);
+
+        this->sync_tab_stops();
 
         ASSERT(yed_buff_n_lines(this->buffer) == this->screen().scrollback + height,
                "buff wrong size");
@@ -942,6 +972,29 @@ TERM_CYAN
         this->set_scroll(0, 0);
         this->set_cursor(1, 1);
         this->clear_page();
+        this->init_tab_stops(1);
+    }
+
+    void clear_scrollback() {
+        for (int row = 1; row <= this->screen().scrollback; row += 1) {
+            this->screen().clear_row_abs(row);
+        }
+    }
+
+    void full_reset() {
+        Screen *screens[] = { &this->alt_screen, &this->main_screen };
+
+        this->charset = 'B';
+
+        for (auto screen : screens) {
+            this->_screen = screen;
+
+            this->reset();
+
+            screen->cursor_saved = 0;
+        }
+
+        this->_screen = &this->main_screen;
     }
 
     void insert_cell(int row, int col, yed_glyph *g) {
@@ -962,6 +1015,74 @@ TERM_CYAN
 
     void delete_current_cell() {
         this->delete_cell(this->row(), this->col());
+    }
+
+    int tab_stop(int col) {
+        return col >= 1
+            && col < (int)this->tab_stops.size()
+            && this->tab_stops[col];
+    }
+
+    void init_tab_stops(int from_col) {
+        int tw = get_tab_width();
+
+        this->tab_stops.assign(MAX(this->width(), 0) + 1, 0);
+
+        for (int col = MAX(from_col, 1); col <= this->width(); col += 1) {
+            this->tab_stops[col] = ((col - 1) % tw) == 0;
+        }
+    }
+
+    void sync_tab_stops() {
+        int old_width = (int)this->tab_stops.size() - 1;
+
+        if (old_width == this->width()) { return; }
+
+        std::vector<char> save = this->tab_stops;
+
+        this->init_tab_stops(MAX(old_width, 0) + 1);
+
+        for (int col = 1; col <= MIN(old_width, this->width()); col += 1) {
+            this->tab_stops[col] = save[col];
+        }
+    }
+
+    void clear_tab_stop(int col) {
+        if (col >= 1 && col < (int)this->tab_stops.size()) {
+            this->tab_stops[col] = 0;
+        }
+    }
+
+    void clear_all_tab_stops() {
+        this->tab_stops.assign(MAX(this->width(), 0) + 1, 0);
+    }
+
+    void set_tab_stop(int col) {
+        if (col >= 1 && col < (int)this->tab_stops.size()) {
+            this->tab_stops[col] = 1;
+        }
+    }
+
+    void tab_forward(int n) {
+        int col = this->col();
+
+        for (; n > 0; n -= 1) {
+            if (col >= this->width()) { break; }
+            do { col += 1; } while (col < this->width() && !this->tab_stop(col));
+        }
+
+        this->set_cursor(this->row(), col);
+    }
+
+    void tab_backward(int n) {
+        int col = this->col();
+
+        for (; n > 0; n -= 1) {
+            if (col <= 1) { break; }
+            do { col -= 1; } while (col > 1 && !this->tab_stop(col));
+        }
+
+        this->set_cursor(this->row(), col);
     }
 
     void scroll_up()          { this->screen().scroll_up(this->buffer);        }
@@ -1066,6 +1187,33 @@ do {                                      \
             case 'G':
                 val = csi.args.size() ? csi.args[0] : 1;
                 this->set_cursor(this->row(), val);
+                break;
+            case 'I':
+                val = csi.args.size() ? csi.args[0] : 1;
+                this->tab_forward(val);
+                break;
+            case 'Z':
+                val = csi.args.size() ? csi.args[0] : 1;
+                this->tab_backward(val);
+                break;
+            case 'g':
+                val = csi.args.size() ? csi.args[0] : 0;
+                switch (val) {
+                    case 0:
+                        this->clear_tab_stop(this->col());
+                        break;
+                    case 3:
+                        this->clear_all_tab_stops();
+                        break;
+                    default:
+                        goto unhandled;
+                }
+                break;
+            case 'W':
+            case PRIV_DEC('W'):
+                val = csi.args.size() ? csi.args[0] : 5;
+                if (val != 5) { goto unhandled; }
+                this->init_tab_stops(1);
                 break;
             case 'J':
                 if (csi.args.size() == 0) { goto J_missing; }
@@ -1450,7 +1598,16 @@ do {                                      \
     void execute_OSC(OSC &osc) {
         switch (osc.command) {
             case 0:
-                this->title = osc.arg;
+            case 2:
+                break;
+            case 1:
+                /* Ignore icon name. */
+                break;
+            case 7:
+                /* Ignore working directory report. */
+                break;
+            case 9:
+                /* Ignore progress/notification (ConEmu-style '9;4;state;pct'). */
                 break;
             case 4: case 10: case 11: {
                 if (osc.arg == "?") {
@@ -1535,17 +1692,14 @@ do {                                \
         size_t       len           = buff.size() - 1;
         yed_glyph   *git           = NULL;
         yed_glyph    last          = yed_glyph_copy(GLYPH(""));
-        int          csi_countdown = 0;
+        char        *skip_to       = NULL;
         char        *p             = NULL;
         char         c             = 0;
         int          glyph_len     = 0;
 
         { BUFF_WRITABLE_GUARD(this->buffer);
             yed_glyph_traverse_n(s, len, git) {
-                if (csi_countdown) {
-                    csi_countdown -= 1;
-                    continue;
-                }
+                if (skip_to != NULL && &git->c < skip_to) { continue; }
 
 /*                 ASSERT(incomplete_csi.size() == 0, "incomplete in middle of stream"); */
 
@@ -1600,7 +1754,7 @@ do {                                \
                             if (csi.complete) {
                                 DBG("CSI: '\\e[%.*s'", csi.len, p + 1);
                                 this->execute_CSI(csi);
-                                csi_countdown = csi.len;
+                                skip_to = p + 1 + csi.len;
                             } else {
                                 if (*(p + 1 + csi.len) == 0) {
                                     DBG("INCOMPLETE CSI: '\\e[%.*s'", csi.len, p + 1);
@@ -1609,7 +1763,7 @@ do {                                \
                                     for (int i = 0; i < csi.len; i += 1) {
                                         incomplete_csi += *(p + 1 + i);
                                     }
-                                    csi_countdown = incomplete_csi.size();
+                                    skip_to = p + 1 + csi.len;
                                 } else {
                                     int skip = csi.len;
                                     while (*(p + 1 + skip) && (*(p + 1 + skip) < 0x40 || *(p + 1 + skip) > 0x7E)) {
@@ -1617,7 +1771,7 @@ do {                                \
                                     }
                                     if (*(p + 1 + skip)) { skip += 1; }
                                     DBG("WARN: invalid CSI: '\\e[%.*s'", skip, p + 1);
-                                    csi_countdown = skip;
+                                    skip_to = p + 1 + skip;
                                 }
                             }
 
@@ -1625,7 +1779,7 @@ do {                                \
                         }
                         case ']': {
                             OSC osc(p + 1);
-                            csi_countdown = osc.len;
+                            skip_to = p + 1 + osc.len;
 
                             DUMP_DEBUG();
 
@@ -1643,8 +1797,6 @@ do {                                \
                                 } else {
                                     DBG("WARN: invalid/incomplete OSC: '\\e]%.*s'", osc.len, p + 1);
                                 }
-
-                                csi_countdown = incomplete_csi.size();
                             }
 
                             break;
@@ -1653,7 +1805,7 @@ do {                                \
                         case 'P': {
                             /* Device Control String */
                             DCS dcs(p + 1);
-                            csi_countdown = dcs.len;
+                            skip_to = p + 1 + dcs.len;
 
                             DUMP_DEBUG();
 
@@ -1692,6 +1844,12 @@ do {                                \
                                 this->set_cursor(1, 1);
                                 this->current_attrs = ZERO_ATTR;
                             }
+                            break;
+                        case 'c':
+                            this->full_reset();
+                            break;
+                        case 'H':
+                            this->set_tab_stop(this->col());
                             break;
                         case 'D':
                         case 'E':
@@ -1771,12 +1929,7 @@ dbg_out:;
                         }
                         break;
                     case '\t':
-                        do {
-                            if (this->col() == this->width()) { break; }
-
-                            this->set_current_cell(GLYPH(" "));
-                            this->move_cursor(0, 1);
-                        } while (this->col() % yed_get_tab_width() != 1);
+                        this->tab_forward(1);
                         break;
                     case CTRL_G:
                         /* Bell */
@@ -2283,6 +2436,7 @@ static void key(yed_event *event) {
     if (yed_var_is_truthy("terminal-debug-log")) {
         char *s = yed_keys_to_string(1, &event->key);
         DBG("KEY %s", s);
+        free(s);
     }
 
     if (yed_get_real_keys(event->key, &len, keys)) {
@@ -2761,6 +2915,7 @@ int yed_plugin_boot(yed_plugin *self) {
         { "terminal-scrollback",             XSTR(DEFAULT_SCROLLBACK)      },
         { "terminal-max-block-size",         XSTR(DEFAULT_MAX_BLOCK_SIZE)  },
         { "terminal-read-chunk-size",        XSTR(DEFAULT_READ_CHUNK_SIZE) },
+        { "terminal-tab-width",              XSTR(DEFAULT_TAB_WIDTH)       },
         { "terminal-auto-term-mode",         "ON"                          },
         { "terminal-show-welcome",           "yes"                         },
         { "terminal-color0",                 "&black"                      },
