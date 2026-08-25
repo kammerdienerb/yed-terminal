@@ -721,6 +721,8 @@ struct Term {
     Screen             alt_screen;
     Screen            *_screen         = NULL;
     int                app_keys        = 0;
+    int                mouse_tracking  = 0;
+    int                sgr_mouse       = 0;
     char               charset         = 'B';
     int                auto_wrap       = 1;
     int                wrap_next       = 0;
@@ -964,15 +966,66 @@ TERM_CYAN
         }
     }
     void reset() {
-        this->current_attrs = ZERO_ATTR;
-        this->app_keys      = 0;
-        this->auto_wrap     = 1;
-        this->wrap_next     = 0;
+        this->current_attrs  = ZERO_ATTR;
+        this->app_keys       = 0;
+        this->mouse_tracking = 0;
+        this->sgr_mouse      = 0;
+        this->auto_wrap      = 1;
+        this->wrap_next      = 0;
 
         this->set_scroll(0, 0);
         this->set_cursor(1, 1);
         this->clear_page();
         this->init_tab_stops(1);
+    }
+
+    int set_dec_private_mode(long mode, int enabled) {
+        switch (mode) {
+            case 1:
+                this->app_keys = enabled;
+                break;
+            case 3:
+                this->reset();
+                break;
+            case 7:
+                this->auto_wrap = enabled;
+                break;
+            case 12:
+                /* Ignore blinking cursor. */
+                break;
+            case 25:
+                /* Ignore cursor show/hide. */
+                break;
+            case 1000:
+            case 1002:
+            case 1003:
+                if (enabled) {
+                    this->mouse_tracking = mode;
+                } else if (this->mouse_tracking == mode) {
+                    this->mouse_tracking = 0;
+                }
+                break;
+            case 1006:
+                this->sgr_mouse = enabled;
+                break;
+            case 1049:
+                if (enabled) {
+                    this->_screen = &this->alt_screen;
+                    this->set_cursor(1, 1);
+                    this->clear_page();
+                    this->screen().make_dirty();
+                    DBG("alt_screen ON");
+                } else {
+                    this->_screen = &this->main_screen;
+                    this->screen().make_dirty();
+                    DBG("alt_screen OFF");
+                }
+                break;
+            default:
+                return 0;
+        }
+
+        return 1;
     }
 
     void clear_scrollback() {
@@ -1304,62 +1357,20 @@ do {                                      \
                 break;
             case PRIV_DEC('h'):
                 /* DEC Private modes enable. */
-                val = csi.args.size() ? csi.args[0] : 1;
-                switch (val) {
-                    case 1:
-                        this->app_keys = 1;
-                        break;
-                    case 3:
-                        this->reset();
-                        break;
-                    case 7:
-                        this->auto_wrap = 1;
-                        break;
-                    case 12:
-                        /* Ignore blinking cursor. */
-                        break;
-                    case 25:
-                        /* Ignore cursor show/hide. */
-                        break;
-                    case 1049:
-                        this->_screen = &this->alt_screen;
-                        this->set_cursor(1, 1);
-                        this->clear_page();
-                        this->screen().make_dirty();
-                        DBG("alt_screen ON");
-                        break;
-                    default:;
+                if (csi.args.size() == 0) { csi.args.push_back(1); }
+                for (auto mode : csi.args) {
+                    if (!this->set_dec_private_mode(mode, 1)) {
                         goto unhandled;
-                        break;
+                    }
                 }
                 break;
             case PRIV_DEC('l'):
                 /* DEC Private modes disable. */
-                val = csi.args.size() ? csi.args[0] : 1;
-                switch (val) {
-                    case 1:
-                        this->app_keys = 0;
-                        break;
-                    case 3:
-                        this->reset();
-                        break;
-                    case 7:
-                        this->auto_wrap = 0;
-                        break;
-                    case 12:
-                        /* Ignore blinking cursor. */
-                        break;
-                    case 25:
-                        /* Ignore cursor show/hide. */
-                        break;
-                    case 1049:
-                        this->_screen = &this->main_screen;
-                        this->screen().make_dirty();
-                        DBG("alt_screen OFF");
-                        break;
-                    default:;
+                if (csi.args.size() == 0) { csi.args.push_back(1); }
+                for (auto mode : csi.args) {
+                    if (!this->set_dec_private_mode(mode, 0)) {
                         goto unhandled;
-                        break;
+                    }
                 }
                 break;
             case PRIV_DEC('u'):
@@ -2018,6 +2029,68 @@ out:;
         }
     }
 
+    int mouse(int key, yed_frame *frame) {
+        int button;
+        int kind;
+        int row;
+        int col;
+        char final = 'M';
+
+        if (!this->mouse_tracking || !IS_MOUSE(key)) { return 0; }
+
+        switch (MOUSE_BUTTON(key)) {
+            case MOUSE_BUTTON_LEFT:   button = 0;  break;
+            case MOUSE_BUTTON_MIDDLE: button = 1;  break;
+            case MOUSE_BUTTON_RIGHT:  button = 2;  break;
+            case MOUSE_WHEEL_UP:      button = 64; break;
+            case MOUSE_WHEEL_DOWN:    button = 65; break;
+            default: return 0;
+        }
+
+        kind = MOUSE_KIND(key);
+        if (button < 64) {
+            if (kind == MOUSE_RELEASE) {
+                final = 'm';
+            } else if (kind == MOUSE_DRAG) {
+                if (this->mouse_tracking != 1002
+                &&  this->mouse_tracking != 1003) {
+                    return 0;
+                }
+                button += 32;
+            } else if (kind != MOUSE_PRESS) {
+                return 0;
+            }
+        }
+
+        row = MOUSE_ROW(key) - frame->top + 1;
+        col = MOUSE_COL(key) - frame->left - frame->gutter_width + 1;
+
+        if (row < 1 || row > this->height()
+        ||  col < 1 || col > this->width()) {
+            return 1;
+        }
+
+        if (this->sgr_mouse) {
+            char chars[64];
+            int  len;
+
+            len = snprintf(chars, sizeof(chars), "\e[<%d;%d;%d%c",
+                           button, col, row, final);
+            write(this->master_fd, chars, len);
+        } else if (row <= 223 && col <= 223) {
+            unsigned char chars[] = {
+                '\e', '[', 'M',
+                (unsigned char)((final == 'm' ? 3 : button) + 32),
+                (unsigned char)(col + 32),
+                (unsigned char)(row + 32),
+            };
+
+            write(this->master_fd, chars, sizeof(chars));
+        }
+
+        return 1;
+    }
+
     void keys(int len, int *keys) {
         for (int i = 0; i < len; i += 1) {
             int key = keys[i];
@@ -2421,7 +2494,19 @@ static void key(yed_event *event) {
 
     if (IS_MOUSE(event->key)) {
         auto btn = MOUSE_BUTTON(event->key);
-        if (btn != MOUSE_WHEEL_UP && btn != MOUSE_WHEEL_DOWN) {
+        switch (btn) {
+            case MOUSE_BUTTON_LEFT:
+            case MOUSE_BUTTON_MIDDLE:
+            case MOUSE_BUTTON_RIGHT:
+            case MOUSE_WHEEL_UP:
+            case MOUSE_WHEEL_DOWN:
+                break;
+            default:
+                return;
+        }
+        if (!yed_cell_is_in_frame(MOUSE_ROW(event->key),
+                                  MOUSE_COL(event->key),
+                                  ys->active_frame)) {
             return;
         }
     }
@@ -2431,6 +2516,18 @@ static void key(yed_event *event) {
 
     for (auto &b : state->bindings) {
         if (b.key == event->key) { return; }
+    }
+
+    if (IS_MOUSE(event->key)) {
+        if (t->mouse(event->key, ys->active_frame)) {
+            event->cancel = 1;
+            return;
+        }
+
+        auto btn = MOUSE_BUTTON(event->key);
+        if (btn != MOUSE_WHEEL_UP && btn != MOUSE_WHEEL_DOWN) {
+            return;
+        }
     }
 
     if (yed_var_is_truthy("terminal-debug-log")) {
